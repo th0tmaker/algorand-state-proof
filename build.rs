@@ -60,40 +60,23 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 }
 
-// ── Minimal SHAKE256 (Keccak-f[1600]) ───────────────────────────────────────
-//
-// Rate for SHAKE256: 1600 − 2×256 = 1088 bits = 136 bytes.
-const SHAKE256_STATE_WORDS: usize = 25;
-const SHAKE256_RATE: usize = 136;
-
-struct Shake256 {
-    /// The 1600-bit (200-byte) Keccak-f[1600] permutation state, stored as 25 × u64 words/lanes.
-    state: [u64; SHAKE256_STATE_WORDS],
-    /// Input buffer accumulating bytes until a full 136-byte block is ready.
-    buf: [u8; SHAKE256_RATE],
-    /// Bytes written into `buf` since the last permutation. Resets to 0 each block.
-    pos: usize,
-    /// Set to `true` after `finalize_xof()`; guards against absorbing after squeezing has begun.
-    squeezing: bool,
-    /// Bytes consumed from the current output block. When it hits `SHAKE256_RATE`, the block
-    /// is exhausted and the next permutation is triggered.
-    squeeze_pos: usize,
-}
-
-impl Shake256 {
-    fn new() -> Self {
-        Self {
-            state: [0u64; SHAKE256_STATE_WORDS],
-            buf: [0u8; SHAKE256_RATE],
-            pos: 0,
-            squeezing: false,
-            // Set to SHAKE256_RATE so the first squeeze call sees an exhausted
-            // output block and triggers a permutation before reading any bytes.
-            squeeze_pos: SHAKE256_RATE,
-        }
-    }
-}
+include!("src/keccak.rs");
 
 fn derive_algorand_matrix() -> [[u64; 1024]; 8] {
-    todo!()
+    let mut shake = Shake256::new();
+    shake.absorb(&64u16.to_le_bytes());
+    shake.absorb(&8u16.to_le_bytes());
+    shake.absorb(&1024u16.to_le_bytes());
+    shake.absorb(b"Algorand");
+    shake.finalize_xof();
+
+    let mut matrix = [[0u64; 1024]; 8];
+    let mut buf = [0u8; 8];
+    for row in matrix.iter_mut() {
+        for entry in row.iter_mut() {
+            shake.squeeze_bytes(&mut buf);
+            *entry = u64::from_le_bytes(buf);
+        }
+    }
+    matrix
 }
