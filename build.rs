@@ -1,9 +1,42 @@
 // build.rs
 
-use std::env;
-use std::fmt::Write;
-use std::fs;
-use std::path::Path;
+use std::{env, fmt::Write, fs, path::Path};
+
+include!("src/keccak.rs");
+
+// Sumhash512 matrix parameters:
+//
+//   u = 64   — bits per output word (one u64 lane).
+//   n = 8    — number of rows; n × u = 8 × 64 = 512-bit output (hence "Sumhash512").
+//   m = 1024 — number of columns; the input block size in bits (128 bytes),
+//              giving a 2:1 compression ratio (1024 bits → 512 bits) per block.
+//
+// All three are encoded as u16 little-endian. u16 is the smallest type that
+// fits all values (m=1024 overflows u8), and a uniform type keeps the encoding
+// consistent with the reference C implementation (uint16_t in c-sumhash).
+//
+// "Algorand" is the domain separation seed — it binds this matrix uniquely to
+// Algorand's use of Sumhash512. Any other seed produces a different matrix that
+// Algorand nodes would reject. Verifiable against algorand/c-sumhash.
+fn derive_algorand_matrix() -> [[u64; 1024]; 8] {
+    let mut shake = Shake256::new();
+    shake.absorb(&64u16.to_le_bytes());    // u: bits per output word
+    shake.absorb(&8u16.to_le_bytes());     // n: number of rows
+    shake.absorb(&1024u16.to_le_bytes()); // m: number of columns
+    shake.absorb(b"Algorand");            // domain separation seed
+    shake.flip();
+
+    // Squeeze 8 × 1024 little-endian u64 values row by row.
+    let mut matrix = [[0u64; 1024]; 8];
+    let mut buf = [0u8; 8];
+    for row in matrix.iter_mut() {
+        for entry in row.iter_mut() {
+            shake.squeeze(&mut buf);
+            *entry = u64::from_le_bytes(buf);
+        }
+    }
+    matrix
+}
 
 fn main() {
     // Cargo sets OUT_DIR to a build-specific scratch directory
@@ -60,23 +93,3 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 }
 
-include!("src/keccak.rs");
-
-fn derive_algorand_matrix() -> [[u64; 1024]; 8] {
-    let mut shake = Shake256::new();
-    shake.absorb(&64u16.to_le_bytes());
-    shake.absorb(&8u16.to_le_bytes());
-    shake.absorb(&1024u16.to_le_bytes());
-    shake.absorb(b"Algorand");
-    shake.finalize_xof();
-
-    let mut matrix = [[0u64; 1024]; 8];
-    let mut buf = [0u8; 8];
-    for row in matrix.iter_mut() {
-        for entry in row.iter_mut() {
-            shake.squeeze_bytes(&mut buf);
-            *entry = u64::from_le_bytes(buf);
-        }
-    }
-    matrix
-}

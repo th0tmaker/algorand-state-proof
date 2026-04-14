@@ -1,96 +1,47 @@
-// Rate for SHAKE256: 1600 − 2×256 = 1088 bits = 136 bytes.
-pub(crate) const SHAKE256_STATE_WORDS: usize = 25;
-pub(crate) const SHAKE256_RATE: usize = 136;
+// src/keccak.rs
 
-pub(crate) struct Shake256 {
-    /// The 1600-bit (200-byte) Keccak-f[1600] permutation state, stored as 25 × u64 words/lanes.
-    state: [u64; SHAKE256_STATE_WORDS],
-    /// Input buffer accumulating bytes until a full 136-byte block is ready.
-    buf: [u8; SHAKE256_RATE],
-    /// Bytes written into `buf` since the last permutation. Resets to 0 each block.
-    pos: usize,
-    /// Set to `true` after `finalize_xof()`; guards against absorbing after squeezing has begun.
-    squeezing: bool,
-    /// Bytes consumed from the current output block. When it hits `SHAKE256_RATE`, the block
-    /// is exhausted and the next permutation is triggered.
-    squeeze_pos: usize,
-}
+// ── Shake256 internals ────────────────────────────────────────────────────────
+//
+/// Number of u64 lanes in the Keccak-f[1600] state (1600 bits / 64 = 25).
+const SHAKE256_STATE_WORDS: usize = 25;
+/// Bytes absorbed or squeezed per permutation call (1600 − 2×256 = 1088 bits = 136 bytes).
+const SHAKE256_RATE: usize = 136;
 
-impl Shake256 {
-    pub(crate) fn new() -> Self {
-        Self {
-            state: [0u64; SHAKE256_STATE_WORDS],
-            buf: [0u8; SHAKE256_RATE],
-            pos: 0,
-            squeezing: false,
-            squeeze_pos: 0,
-        }
-    }
+// ── Keccak-f[1600] internals ──────────────────────────────────────────────────
+//
+/// The `RHO` table. Fixed per-lane bit-rotation offsets used in the ρ step. Defined by the
+/// Keccak spec to maximise diffusion and break symmetry across all 24 rounds.
+const RHO: [[u32; 5]; 5] = [
+    [ 0, 36,  3, 41, 18],
+    [ 1, 44, 10, 45,  2],
+    [62,  6, 43, 15, 61],
+    [28, 55, 25, 21, 56],
+    [27, 20, 39,  8, 14],
+];
 
-    pub(crate) fn absorb(&mut self, data: &[u8]) {
-        for &byte in data {
-            // Write one byte into the buffer at the current position.
-            self.buf[self.pos] = byte;
-            self.pos += 1;
+/// Round constants XOR'd into lane (0,0) during the ι step. One per round,
+/// derived from a maximal-length LFSR. They break round-to-round symmetry,
+/// preventing the permutation from being trivially invertible.
+const RC: [u64; 24] = [
+    0x0000000000000001, 0x0000000000008082, 0x800000000000808a,
+    0x8000000080008000, 0x000000000000808b, 0x0000000080000001,
+    0x8000000080008081, 0x8000000000008009, 0x000000000000008a,
+    0x0000000000000088, 0x0000000080008009, 0x000000008000000a,
+    0x000000008000808b, 0x800000000000008b, 0x8000000000008089,
+    0x8000000000008003, 0x8000000000008002, 0x8000000000000080,
+    0x000000000000800a, 0x800000008000000a, 0x8000000080008081,
+    0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
+];
 
-            // When the buffer is full (136 bytes = one rate block), XOR it into
-            // the state, apply the permutation, then clear the buffer for the
-            // next block.
-            if self.pos == SHAKE256_RATE {
-                self.process_block();
-                self.buf = [0u8; SHAKE256_RATE];
-                self.pos = 0;
-            }
-        }
-    }
-
-    pub(crate) fn finalize_xof(&mut self) {
-        // Apply SHAKE256 padding to the remaining bytes in the buffer:
-        //   - 0x1f at the current write position: SHAKE domain separation
-        //     (distinguishes SHAKE from SHA-3, which uses 0x06).
-        //   - 0x80 at the last byte of the rate block: the trailing '1' bit
-        //     of the multi-rate padding rule (pad10*1).
-        // If pos == SHAKE256_RATE - 1 both XORs hit the same byte: 0x1f ^ 0x80 = 0x9f.
-        self.buf[self.pos] ^= 0x1f;
-        self.buf[SHAKE256_RATE - 1] ^= 0x80;
-        // Process the final (partial) block, then switch to squeeze mode.
-        self.process_block();
-        self.squeezing = true;
-        self.squeeze_pos = 0;
-    }
-
-    pub(crate) fn squeeze_bytes(&mut self, out: &mut [u8]) {
-        for byte in out.iter_mut() {
-            // When all 136 rate bytes of the current output block have been
-            // consumed, apply another permutation to produce the next block.
-            if self.squeeze_pos == SHAKE256_RATE {
-                keccak_f(&mut self.state);
-                self.squeeze_pos = 0;
-            }
-            // Extract one byte from the state in little-endian lane order:
-            // lane index = squeeze_pos / 8, byte within lane = squeeze_pos % 8.
-            *byte = (self.state[self.squeeze_pos / 8] >> (8 * (self.squeeze_pos % 8))) as u8;
-            self.squeeze_pos += 1;
-        }
-    }
-
-    fn process_block(&mut self) {
-        // XOR the 136-byte buffer into the first 17 u64 lanes of the state
-        // (136 / 8 = 17), interpreting each 8-byte chunk as a little-endian u64.
-        for i in 0..(SHAKE256_RATE / 8) {
-            let word = u64::from_le_bytes(self.buf[8 * i..8 * (i + 1)].try_into().unwrap());
-            self.state[i] ^= word;
-        }
-        keccak_f(&mut self.state);
-    }
-}
-
+/// Applies the Keccak-f[1600] permutation to `state` in-place.
+///
+/// Runs 24 rounds of the five-step sequence θ, ρ, π, χ, ι over a 25-word/lane
+/// (1600-bit) state. This is the core primitive underlying SHAKE256 and SHA-3.
 pub(crate) fn keccak_f(state: &mut [u64; SHAKE256_STATE_WORDS]) {
+    // Iterate in range of 24 rounds and execute the five-step sequence  
     for round in 0..24 {
-        // θ — column parity mixing.
-        // C[x] = XOR of all lanes in column x.
-        // D[x] = C[x-1] XOR rot(C[x+1], 1) — the mixing derivative.
-        // Each lane is XOR'd with D[x] for its column x.
+        // Step 1: θ — column parity mixing:
+        // C[x] = XOR of all words/lanes in column x.
         let c = [
             state[0] ^ state[5] ^ state[10] ^ state[15] ^ state[20],
             state[1] ^ state[6] ^ state[11] ^ state[16] ^ state[21],
@@ -98,6 +49,8 @@ pub(crate) fn keccak_f(state: &mut [u64; SHAKE256_STATE_WORDS]) {
             state[3] ^ state[8] ^ state[13] ^ state[18] ^ state[23],
             state[4] ^ state[9] ^ state[14] ^ state[19] ^ state[24],
         ];
+
+        // D[x] = C[x-1] XOR rot(C[x+1], 1) — the mixing derivative.
         let d = [
             c[4] ^ c[1].rotate_left(1),
             c[0] ^ c[2].rotate_left(1),
@@ -105,54 +58,194 @@ pub(crate) fn keccak_f(state: &mut [u64; SHAKE256_STATE_WORDS]) {
             c[2] ^ c[4].rotate_left(1),
             c[3] ^ c[0].rotate_left(1),
         ];
+
+        // Each word/lane is XOR'd with D[x] for its column x.
         for y in 0..5 {
             for x in 0..5 {
                 state[x + 5 * y] ^= d[x];
             }
         }
-
-        // ρ + π — combined into one pass over the state.
-        // ρ rotates each lane by a fixed offset RHO[x][y].
-        // π permutes lanes to new positions: old (x,y) → new (y, (2x+3y) mod 5).
-        // Both are linear so they can be merged: rotate first, then write to
-        // the new position in the temporary array b.
-        const RHO: [[u32; 5]; 5] = [
-            [ 0, 36,  3, 41, 18],
-            [ 1, 44, 10, 45,  2],
-            [62,  6, 43, 15, 61],
-            [28, 55, 25, 21, 56],
-            [27, 20, 39,  8, 14],
-        ];
+        /*  
+        Step 2: ρ — bit rotation inside each word/lane
+        & Step 3: π — lane permutation to compute new position 
+        
+        ρ rotates each lane by a fixed offset RHO[x][y].
+        π permutes lanes to new positions: old (x,y) → new (y, (2x+3y) mod 5).
+        Both are linear so they can be merged: rotate first, then write to
+        the new position in the temporary array b.
+        */
         let mut b = [0u64; 25];
-        for y in 0..5usize {
-            for x in 0..5usize {
+        for y in 0..5 {
+            for x in 0..5 {
                 b[y + 5 * ((2 * x + 3 * y) % 5)] = state[x + 5 * y].rotate_left(RHO[x][y]);
             }
         }
 
-        // χ — the only non-linear step.
+        // Step 4: χ — the only non-linear phase.
         // A'[x,y] = B[x,y] XOR ((NOT B[x+1,y]) AND B[x+2,y]), x indices mod 5.
-        for y in 0..5usize {
-            for x in 0..5usize {
+        for y in 0..5 {
+            for x in 0..5 {
                 state[x + 5 * y] = b[x + 5 * y] ^ ((!b[(x + 1) % 5 + 5 * y]) & b[(x + 2) % 5 + 5 * y]);
             }
         }
 
-        // ι — XOR a round-specific constant into lane (0,0).
-        // The 24 constants break the symmetry of the permutation; without them
-        // every round would be identical and the function would be trivially invertible.
-        const RC: [u64; 24] = [
-            0x0000000000000001, 0x0000000000008082, 0x800000000000808a,
-            0x8000000080008000, 0x000000000000808b, 0x0000000080000001,
-            0x8000000080008081, 0x8000000000008009, 0x000000000000008a,
-            0x0000000000000088, 0x0000000080008009, 0x000000008000000a,
-            0x000000008000808b, 0x800000000000008b, 0x8000000000008089,
-            0x8000000000008003, 0x8000000000008002, 0x8000000000000080,
-            0x000000000000800a, 0x800000008000000a, 0x8000000080008081,
-            0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
-        ];
+        // Step 5: ι — XOR the round constant into lane (0,0).
         state[0] ^= RC[round];
     }
+}
+
+/// SHAKE256 sponge state for streaming absorb and arbitrary-length squeeze.
+///
+/// Wraps a 1600-bit Keccak-f[1600] permutation state with a rate-sized input
+/// buffer. Input is absorbed in 136-byte blocks; after `flip()`, output
+/// bytes are squeezed from the same state one block at a time.
+pub(crate) struct Shake256 {
+    /// The 1600-bit (200-byte) Keccak-f[1600] permutation state, stored as 25 × u64 words/lanes.
+    state: [u64; SHAKE256_STATE_WORDS],
+    /// Input buffer accumulating bytes until a full 136-byte block is ready.
+    buf: [u8; SHAKE256_RATE],
+    /// Byte offset into the current block. During absorb: bytes written into `buf`.
+    /// During squeeze: bytes consumed from the current output block.
+    /// Resets to 0 at each phase transition and block boundary.
+    pos: usize,
+    /// Set to `true` after `flip()`; guards against absorbing after squeezing has begun.
+    /// Also determines the meaning of `pos`: absorb offset when `false`, squeeze offset when `true`.
+    squeezing: bool,
+}
+
+impl Shake256 {
+    /// Returns a zeroed sponge ready to absorb input.
+    pub(crate) fn new() -> Self {
+        Self {
+            state: [0u64; SHAKE256_STATE_WORDS],
+            buf: [0u8; SHAKE256_RATE],
+            pos: 0,
+            squeezing: false,
+        }
+    }
+
+    /// XORs `self.buf` into the first 17 words/lanes of the state as little-endian
+    /// `u64`s, then applies the Keccak-f[1600] permutation in-place.
+    fn process_block(&mut self) {
+        // XOR the 136-byte buffer into the first 17 words of the state
+        // (136 / 8 = 17), interpreting each 8-byte chunk as a little-endian u64.
+        for i in 0..(SHAKE256_RATE / 8) {
+            let word = u64::from_le_bytes(self.buf[8 * i..8 * (i + 1)].try_into().unwrap());
+            self.state[i] ^= word;
+        }
+
+        // Apply the Keccak-f[1600] permutation in-place
+        keccak_f(&mut self.state);
+    }
+
+    /// Feeds `data` into the sponge one byte at a time, flushing a full
+    /// 136-byte block into the state via `process_block` whenever the buffer fills.
+    ///
+    /// # Panics (debug builds)
+    /// Panics if called after `flip()` — absorbing into a finalized sponge silently
+    /// corrupts output since the buffer no longer feeds the state correctly.
+    pub(crate) fn absorb(&mut self, data: &[u8]) {
+        debug_assert!(!self.squeezing, "absorb called after flip");
+        // Copy as many bytes as can fit into the current block in one shot,
+        // flush when full, and repeat until all input is consumed.
+        let mut remaining = data;
+        while !remaining.is_empty() {
+            let space = SHAKE256_RATE - self.pos;
+            let take = remaining.len().min(space);
+            self.buf[self.pos..self.pos + take].copy_from_slice(&remaining[..take]);
+            self.pos += take;
+            remaining = &remaining[take..];
+
+            // If the buffer is full (136 bytes = one rate block)
+            if self.pos == SHAKE256_RATE {
+                // Process block; XOR it into the state, apply Keccak permutation
+                self.process_block();
+
+                // Reset buffer and position to zero for the next block
+                self.buf = [0u8; SHAKE256_RATE];
+                self.pos = 0;
+            }
+        }
+    }
+
+    /// Finalizes XOF by applying the padding, locking the absorb phase
+    /// and then transitioning to squeeze mode.
+    ///
+    /// Applies SHAKE256 padding (`0x1f` at `pos`, `0x80` at the end of the block),
+    /// processes the final block into the state, then resets `pos` to 0 for squeezing.
+    ///
+    /// # Panics (debug builds)
+    /// Panics if called a second time — double-padding XORs the pad bytes again,
+    /// corrupting the state.
+    pub(crate) fn flip(&mut self) {
+        debug_assert!(!self.squeezing, "flip called twice");
+        /* 
+        Apply SHAKE256 padding to the remaining bytes in the buffer:
+
+        - 0x1f at the current write position: SHAKE domain separation
+            (distinguishes SHAKE from SHA-3, which uses 0x06).
+
+        - 0x80 at the last byte of the rate block: the trailing '1' bit
+            of the multi-rate padding rule (pad10*1).
+
+        - Special case: If pos == SHAKE256_RATE - 1; 
+            both XORs hit the same byte: 0x1f ^ 0x80 = 0x9f.
+        */
+        self.buf[self.pos] ^= 0x1f;  // domain separation + start of padding
+        self.buf[SHAKE256_RATE - 1] ^= 0x80;  // end of padding
+        
+        // Process the final (partial) block into the Keccak state.
+        self.process_block();
+
+        // Switch to squeeze mode and reset the position to zero.
+        self.squeezing = true;
+        self.pos = 0;
+    }
+
+    /// Squeezes `out.len()` bytes from the sponge state into `out`.
+    ///
+    /// Reads bytes from the state in little-endian lane order, applying another
+    /// Keccak-f[1600] permutation each time a 136-byte output block is exhausted.
+    ///
+    /// # Panics (debug builds)
+    /// Panics if called before `flip()` — squeezing an unfinalized sponge reads
+    /// raw unpermuted, unpadded state and produces garbage output.
+    pub(crate) fn squeeze(&mut self, out: &mut [u8]) {
+        debug_assert!(self.squeezing, "squeeze called before flip");
+        let mut out = out;
+        while !out.is_empty() {
+            // If all 136 rate bytes of the current output block have been
+            // consumed, apply another permutation to produce the next block.
+            if self.pos == SHAKE256_RATE {
+                keccak_f(&mut self.state);
+                self.pos = 0;
+            }
+
+            // How many bytes remain in the current block, and how many does
+            // the caller still need — copy whichever is smaller in one shot.
+            let available = SHAKE256_RATE - self.pos;
+            let take = out.len().min(available);
+
+            // Write state bytes into out word-by-word via to_le_bytes(), so
+            // the compiler can use full-word loads instead of byte shifts.
+            let mut i = 0;
+            while i < take {
+                let word_idx = (self.pos + i) / 8;
+                let byte_off = (self.pos + i) % 8;
+                let lane_bytes = self.state[word_idx].to_le_bytes();
+
+                // Copy as many bytes from this lane as fit in the remaining take.
+                let lane_remaining = 8 - byte_off;
+                let copy = (take - i).min(lane_remaining);
+                out[i..i + copy].copy_from_slice(&lane_bytes[byte_off..byte_off + copy]);
+                i += copy;
+            }
+
+            self.pos += take;
+            out = &mut out[take..];
+        }
+    }
+
 }
 
 #[cfg(test)]
@@ -161,7 +254,7 @@ mod tests {
 
     /// SHAKE256 of the empty message, first 32 bytes of output.
     /// Skipping absorb entirely exercises the edge case where pos=0 when
-    /// finalize_xof is called — the padding bytes land at buf[0] and
+    /// `flip` is called — the padding bytes land at buf[0] and
     /// buf[135] with nothing in between, which is the smallest valid block.
     /// Expected value from the XKCP reference test vectors (ShortMsgKAT_SHAKE256.txt).
     #[test]
@@ -169,12 +262,12 @@ mod tests {
         // Create a new instance of Shake256
         let mut shake = Shake256::new();
 
-        // Finalize XOF with empty message (no absorb call).
-        shake.finalize_xof();
+        // Flip with empty message (no absorb call).
+        shake.flip();
 
         // Squeeze the first 32 bytes of XOF output.
         let mut out = [0u8; 32];
-        shake.squeeze_bytes(&mut out);
+        shake.squeeze(&mut out);
 
         // With an empty message the entire 136-byte block is just 0x1f at byte 0
         // and 0x80 at byte 135, zeros elsewhere. Keccak-f on that padded block
@@ -189,27 +282,27 @@ mod tests {
     }
     
     /// SHAKE256 of a single byte 0xCC, first 32 bytes of output.
-    /// Exercises the absorb path with non-empty data — the byte 
-    /// is written into buf field, then `finalize_xof` applies
-    /// padding and processes the single partial block
-    /// (as 1 data byte + padding, well under 136 bytes).
+    /// Exercises the absorb path with non-empty data — the byte
+    /// is written into buf field, then `flip` applies padding and
+    /// processes the single partial block (as 1 data byte + padding,
+    /// well under 136 bytes).
     /// Expected value from the XKCP reference test vectors
-    /// (ShortMsgKAT_SHAKE256.txt, Len=8, Msg=CC).   
+    /// (ShortMsgKAT_SHAKE256.txt, Len=8, Msg=CC).
     #[test]
     fn test_shake256_absorb() {
         // Create a new instance of Shake256
         let mut shake = Shake256::new();
 
-        // Finalize XOF with absorb call (single byte literal 0xCC).
+        // Flip with absorb call (single byte literal 0xCC).
         shake.absorb(&[0xCC]);
-        shake.finalize_xof();
+        shake.flip();
 
         // Squeeze the first 32 bytes of XOF output.
         let mut out = [0u8; 32];
-        shake.squeeze_bytes(&mut out);
+        shake.squeeze(&mut out);
 
         // A mismatch here points to a bug in absorb (bytes written to wrong
-        // buf positions) or the interaction between `absorb`` and `finalize_xof`.
+        // buf positions) or the interaction between `absorb` and `flip`.
         assert_eq!(
             out,
             [0xdd, 0xbf, 0x55, 0xdb, 0xf6, 0x59, 0x77, 0xe3,
@@ -220,11 +313,12 @@ mod tests {
     }
 
     /// SHAKE256 of a 136-byte message (exactly one full rate block), first 32 bytes of output.
-    /// With exactly 136 bytes, absorb fills the buffer completely and calls process_block
-    /// once, then finalize_xof pads a fresh empty buffer — exercising the block boundary.
+    /// With exactly 136 bytes, absorb fills the buffer completely and calls `process_block`
+    /// once, then `flip` pads an entirely empty buffer at pos=0 — the edge case where the
+    /// message ends exactly on a block boundary.
     /// Expected value from XKCP reference test vectors (ShortMsgKAT_SHAKE256.txt, Len=1088).
     #[test]
-    fn test_shake256_multi_block_absorb() {
+    fn test_shake256_exact_block_absorb() {
         // Define the 136-byte message
         #[rustfmt::skip]
         let msg = [
@@ -250,13 +344,13 @@ mod tests {
         // Create a new instance of Shake256
         let mut shake = Shake256::new();
 
-        // Finalize XOF with absorb call (absorbing msg consumes full rate block).
+        // Flip with absorb call (absorbing msg consumes full rate block).
         shake.absorb(&msg);
-        shake.finalize_xof();
+        shake.flip();
 
         // Squeeze the first 32 bytes of XOF output.
         let mut out = [0u8; 32];
-        shake.squeeze_bytes(&mut out);
+        shake.squeeze(&mut out);
 
         // A mismatch here means process_block is faulty or was not called correctly
         // at the block boundary, or buf was not cleared properly before `finalize_xof`.
@@ -300,13 +394,13 @@ mod tests {
         // Create a new instance of Shake256
         let mut shake = Shake256::new();
 
-        // Finalize XOF with absorb call (absorbing msg consumes full rate block).
+        // Flip with absorb call (absorbing msg consumes full rate block).
         shake.absorb(&msg);
-        shake.finalize_xof();
+        shake.flip();
 
         // Squeeze 144 bytes of XOF output.
         let mut out = [0u8; 144];
-        shake.squeeze_bytes(&mut out);
+        shake.squeeze(&mut out);
 
         // Bytes 0–135 come from the first squeeze block; bytes 136–143 require
         // a second keccak_f. A mismatch in bytes 136+ means the squeeze boundary
@@ -334,6 +428,64 @@ mod tests {
                 0x06, 0x61, 0x54, 0x0D, 0xF7, 0xED, 0xD9, 0xAF,  // 128–135 (end of block 1)
                 0x37, 0x8A, 0x5D, 0x4A, 0x19, 0xB2, 0xB9, 0x3E,  // 136–143 (start of block 2)
             ]
+        );
+    }
+
+    /// SHAKE256 of a 200-byte message (Len=1600 bits), first 32 bytes of output.
+    /// 200 bytes spans two absorb blocks: bytes 0–135 fill block 1 (triggering
+    /// `process_block`), bytes 136–199 go into block 2. This is the first test
+    /// that exercises `absorb` calling `process_block` mid-stream.
+    /// Expected values from XKCP ShortMsgKAT_SHAKE256.txt (Len=1600).
+    #[test]
+    fn test_shake256_two_block_absorb() {
+        #[rustfmt::skip]
+        let msg = [
+            0x8C, 0x37, 0x98, 0xE5, 0x1B, 0xC6, 0x84, 0x82,
+            0xD7, 0x33, 0x7D, 0x3A, 0xBB, 0x75, 0xDC, 0x9F,
+            0xFE, 0x86, 0x07, 0x14, 0xA9, 0xAD, 0x73, 0x55,
+            0x1E, 0x12, 0x00, 0x59, 0x86, 0x0D, 0xDE, 0x24,
+            0xAB, 0x87, 0x32, 0x72, 0x22, 0xB6, 0x4C, 0xF7,
+            0x74, 0x41, 0x5A, 0x70, 0xF7, 0x24, 0xCD, 0xF2,
+            0x70, 0xDE, 0x3F, 0xE4, 0x7D, 0xDA, 0x07, 0xB6,
+            0x1C, 0x9E, 0xF2, 0xA3, 0x55, 0x1F, 0x45, 0xA5,
+            0x58, 0x48, 0x60, 0x24, 0x8F, 0xAB, 0xDE, 0x67,
+            0x6E, 0x1C, 0xD7, 0x5F, 0x63, 0x55, 0xAA, 0x3E,
+            0xAE, 0xAB, 0xE3, 0xB5, 0x1D, 0xC8, 0x13, 0xD9,
+            0xFB, 0x2E, 0xAA, 0x4F, 0x0F, 0x1D, 0x9F, 0x83,
+            0x4D, 0x7C, 0xAD, 0x9C, 0x7C, 0x69, 0x5A, 0xE8,
+            0x4B, 0x32, 0x93, 0x85, 0xBC, 0x0B, 0xEF, 0x89,
+            0x5B, 0x9F, 0x1E, 0xDF, 0x44, 0xA0, 0x3D, 0x4B,
+            0x41, 0x0C, 0xC2, 0x3A, 0x79, 0xA6, 0xB6, 0x2E,
+            0x4F, 0x34, 0x6A, 0x5E, 0x8D, 0xD8, 0x51, 0xC2,
+            0x85, 0x79, 0x95, 0xDD, 0xBF, 0x5B, 0x2D, 0x71,
+            0x7A, 0xEB, 0x84, 0x73, 0x10, 0xE1, 0xF6, 0xA4,
+            0x6A, 0xC3, 0xD2, 0x6A, 0x7F, 0x9B, 0x44, 0x98,
+            0x5A, 0xF6, 0x56, 0xD2, 0xB7, 0xC9, 0x40, 0x6E,
+            0x8A, 0x9E, 0x8F, 0x47, 0xDC, 0xB4, 0xEF, 0x6B,
+            0x83, 0xCA, 0xAC, 0xF9, 0xAE, 0xFB, 0x61, 0x18,
+            0xBF, 0xCF, 0xF7, 0xE4, 0x4B, 0xEF, 0x69, 0x37,
+            0xEB, 0xDD, 0xC8, 0x91, 0x86, 0x83, 0x9B, 0x77,
+        ];
+
+        // Create a new instance of Shake256
+        let mut shake = Shake256::new();
+
+        // Flip with absorb call (absorbing msg consumes full rate block).
+        shake.absorb(&msg);
+        shake.flip();
+
+        // Squeeze 32 bytes of XOF output.
+        let mut out = [0u8; 32];
+        shake.squeeze(&mut out);
+
+        // A mismatch here means absorb failed to flush at the 136-byte boundary,
+        // or buf was not cleared correctly before continuing into block 2.
+        assert_eq!(
+            out,
+            [0x33, 0x40, 0xB3, 0x7A, 0xED, 0xD2, 0xF0, 0xC6,
+             0x6F, 0x24, 0x83, 0xAB, 0xDC, 0x66, 0xC9, 0x7B,
+             0x45, 0x05, 0x52, 0x75, 0x23, 0x1F, 0x1C, 0x7A,
+             0x92, 0x56, 0x87, 0xB9, 0x46, 0xC9, 0x13, 0x5B],
         );
     }
 
