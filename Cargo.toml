@@ -1,11 +1,6 @@
-[package]
-name = "algorand-state-proof"
-version = "0.1.0"
-edition = "2024"
-description = "Cryptographic attestation of Algorand ledger state across a block range — enables trustless, lightweight, quantum-secure verification without running a node."
-license = "MIT"
-build = "build.rs"
-
-[dependencies]
-
-[build-dependencies]
+[workspace]
+members = [
+    "crates/keccak",
+    "crates/state-proof",
+]
+resolver = "2"

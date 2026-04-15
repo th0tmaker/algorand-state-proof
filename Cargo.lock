@@ -5,3 +5,10 @@ version = 4
 [[package]]
 name = "algorand-state-proof"
 version = "0.1.0"
+dependencies = [
+ "keccak",
+]
+
+[[package]]
+name = "keccak"
+version = "0.1.0"
