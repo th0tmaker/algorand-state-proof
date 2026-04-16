@@ -1,5 +1,8 @@
 // src/keccak.rs
 
+use core::fmt;
+
+
 // ── Shake256 internals ────────────────────────────────────────────────────────
 //
 /// Number of u64 lanes in the Keccak-f[1600] state (1600 bits / 64 = 25).
@@ -66,7 +69,7 @@ pub (crate) fn keccak_f(state: &mut [u64; SHAKE256_STATE_WORDS]) {
             }
         }
         /* Step 2 & 3: ρ — bit rotation inside each word/lane,
-        π — lane permutation to compute new position 
+        π — lane permutation to compute new position.
         
         ρ rotates each lane by a fixed offset RHO[x][y].
         π permutes lanes to new positions: old (x,y) → new (y, (2x+3y) mod 5).
@@ -97,6 +100,8 @@ pub (crate) fn keccak_f(state: &mut [u64; SHAKE256_STATE_WORDS]) {
 /// Wraps a 1600-bit Keccak-f[1600] permutation state with a rate-sized input
 /// buffer. Input is absorbed in 136-byte blocks; after `flip()`, output
 /// bytes are squeezed from the same state one block at a time.
+#[derive(Clone)]
+#[cfg_attr(test, derive(Eq, PartialEq))]
 pub struct Shake256 {
     /// The 1600-bit (200-byte) Keccak-f[1600] permutation state, stored as 25 × u64 words/lanes.
     state: [u64; SHAKE256_STATE_WORDS],
@@ -109,6 +114,15 @@ pub struct Shake256 {
     /// Set to `true` after `flip()`; guards against absorbing after squeezing has begun.
     /// Also determines the meaning of `pos`: absorb offset when `false`, squeeze offset when `true`.
     squeezing: bool,
+}
+
+impl fmt::Debug for Shake256 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Shake256")
+            .field("pos", &self.pos)
+            .field("squeezing", &self.squeezing)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Shake256 {
@@ -154,19 +168,19 @@ impl Shake256 {
             self.pos += take;
             remaining = &remaining[take..];
 
-            // If the buffer is full (136 bytes = one rate block)
+            // If the buffer is full (136 bytes = one rate block).
             if self.pos == SHAKE256_RATE {
-                // Process block; XOR it into the state, apply Keccak permutation
+                // Process block; XOR it into the state, apply Keccak permutation.
                 self.process_block();
 
-                // Reset buffer and position to zero for the next block
-                self.buf = [0u8; SHAKE256_RATE];
+                // Reset buffer and position to zero for the next block.
+                self.buf.fill(0);
                 self.pos = 0;
             }
         }
     }
 
-    /// Finalizes XOF by applying the padding, locking the absorb phase
+    /// Finalises XOF by applying the padding, locking the absorb phase
     /// and then transitioning to squeeze mode.
     ///
     /// Applies SHAKE256 padding (`0x1f` at `pos`, `0x80` at the end of the block),
@@ -488,7 +502,7 @@ mod tests {
     /// Canonical all-zero Keccak-f[1600] state: 25 lanes of 0.
     /// This is the simplest possible input and gives a fully deterministic,
     /// well-known output that exercises all 24 rounds and all five steps
-    /// (θ ρ π χ ι) without any absorb/padding logic involved.
+    /// (θ, ρ, π, χ, ι) without any absorb/padding logic involved.
     #[test]
     fn test_keccak_f_all_zeros() {
         // Initalize all-zero state
