@@ -129,13 +129,14 @@ impl Sumhash {
         let mut cols = [0u64; 8];
         for _ in 0..n {
             let mut row = vec![[0u64; 256]; m_bytes];
-            for j in 0..m_bytes {
+            for entry in row.iter_mut().take(m_bytes) {
                 for col in cols.iter_mut() {
                     shake.squeeze(&mut word_buf);
                     *col = u64::from_le_bytes(word_buf);
                 }
-                for b in 0..=255 {
-                    row[j][b] = sum_byte(&cols, b as u8);
+
+                for (b, slot) in entry.iter_mut().enumerate() {
+                    *slot = sum_byte(&cols, b as u8);
                 }
             }
             table.push(row.into_boxed_slice());
@@ -362,6 +363,12 @@ impl Sumhash512 {
         let mut out = [0u8; SUMHASH512_DIGEST_SIZE];
         h.finalize(&mut out);
         out
+    }
+}
+
+impl Default for Sumhash512 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

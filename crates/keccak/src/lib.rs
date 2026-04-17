@@ -41,8 +41,8 @@ const RC: [u64; 24] = [
 /// Runs 24 rounds of the five-step sequence θ, ρ, π, χ, ι over a 25-word/lane
 /// (1600-bit) state. This is the core primitive underlying SHAKE256 and SHA-3.
 pub (crate) fn keccak_f(state: &mut [u64; SHAKE256_STATE_WORDS]) {
-    // Iterate in range of 24 rounds and execute the five-step sequence  
-    for round in 0..24 {
+    // Iterate over the round counstants one value at a time 
+    for &rc in RC.iter() {
         // Step 1: θ — column parity mixing:
         // C[x] = XOR of all words/lanes in column x.
         let c = [
@@ -91,7 +91,7 @@ pub (crate) fn keccak_f(state: &mut [u64; SHAKE256_STATE_WORDS]) {
         }
 
         // Step 5: ι — XOR the round constant into lane (0,0).
-        state[0] ^= RC[round];
+        state[0] ^= rc;
     }
 }
 
@@ -154,11 +154,11 @@ impl Shake256 {
     /// Feeds `data` into the sponge one byte at a time, flushing a full
     /// 136-byte block into the state via `process_block` whenever the buffer fills.
     ///
-    /// # Panics (debug builds)
+    /// # Panics
     /// Panics if called after `flip()` — absorbing into a finalized sponge silently
     /// corrupts output since the buffer no longer feeds the state correctly.
     pub fn absorb(&mut self, data: &[u8]) {
-        debug_assert!(!self.squeezing, "absorb called after flip");
+        assert!(!self.squeezing, "absorb called after flip");
         // Copy as many bytes as can fit into the current block in one shot,
         // flush when full, and repeat until all input is consumed.
         let mut remaining = data;
@@ -187,11 +187,11 @@ impl Shake256 {
     /// Applies SHAKE256 padding (`0x1f` at `pos`, `0x80` at the end of the block),
     /// processes the final block into the state, then resets `pos` to 0 for squeezing.
     ///
-    /// # Panics (debug builds)
+    /// # Panics
     /// Panics if called a second time — double-padding XORs the pad bytes again,
     /// corrupting the state.
     pub fn flip(&mut self) {
-        debug_assert!(!self.squeezing, "flip called twice");
+        assert!(!self.squeezing, "flip called twice");
         /* Apply SHAKE256 padding to the remaining bytes in the buffer:
 
         - 0x1f at the current write position: SHAKE domain separation
@@ -218,11 +218,11 @@ impl Shake256 {
     /// Reads bytes from the state in little-endian lane order, applying another
     /// Keccak-f[1600] permutation each time a 136-byte output block is exhausted.
     ///
-    /// # Panics (debug builds)
+    /// # Panics
     /// Panics if called before `flip()` — squeezing an unfinalized sponge reads
     /// raw unpermuted, unpadded state and produces garbage output.
     pub fn squeeze(&mut self, out: &mut [u8]) {
-        debug_assert!(self.squeezing, "squeeze called before flip");
+        assert!(self.squeezing, "squeeze called before flip");
         let mut out = out;
         while !out.is_empty() {
             // If all 136 rate bytes of the current output block have been
@@ -257,6 +257,12 @@ impl Shake256 {
         }
     }
 
+}
+
+impl Default for Shake256 {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]

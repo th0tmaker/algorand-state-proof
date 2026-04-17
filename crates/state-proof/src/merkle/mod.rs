@@ -6,9 +6,11 @@ use crate::{constants::SUMHASH512_DIGEST_SIZE, Digest, Sumhash512};
 // Prefixes match Algorand's protocol package (protocol.HashID).
 
 /// Prefix for internal Merkle tree nodes: `Hash("MA" || left || right)`.
+#[allow(unused)]
 const MERKLE_ARRAY_NODE: &[u8] = b"MA";
 
 /// Prefix for empty padding leaves in a vector commitment: `Hash("MB")`.
+#[allow(unused)]
 const MERKLE_VC_BOTTOM_LEAF: &[u8] = b"MB";
 
 // ── Hashable ──────────────────────────────────────────────────────────────────
@@ -23,6 +25,7 @@ pub trait Hashable {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Computes `Hash(domain || data)` for `obj`, reusing `h` without rebuilding its lookup table.
+#[allow(unused)]
 pub(crate) fn hash_obj(h: &mut Sumhash512, obj: &dyn Hashable) -> Digest {
     h.reset();
     let (domain, data) = obj.to_be_hashed();
@@ -36,6 +39,7 @@ pub(crate) fn hash_obj(h: &mut Sumhash512, obj: &dyn Hashable) -> Digest {
 // ── Internal node ─────────────────────────────────────────────────────────────
 
 /// Computes the hash of the internal node directly via `Hash("MA" || left || right)`.
+#[allow(unused)]
 pub(crate) fn hash_internal_node(h: &mut Sumhash512, left: &Digest, right: &Digest) -> Digest {
     h.reset();
     h.update(MERKLE_ARRAY_NODE);
@@ -52,6 +56,7 @@ pub(crate) fn hash_internal_node(h: &mut Sumhash512, left: &Digest, right: &Dige
 ///
 /// `levels[0]` holds the leaf digests; `levels[last]` holds the single root digest.
 /// An odd number of nodes at any level is padded with a zero-digest right sibling.
+#[allow(unused)]
 pub struct MerkleTree {
     levels: Vec<Vec<Digest>>,
 }
@@ -59,6 +64,7 @@ pub struct MerkleTree {
 impl MerkleTree {
     /// Builds a Merkle tree from a slice of [`Hashable`] leaves.
     // #[must_use]
+    #[allow(unused)]
     pub fn build<T: Hashable>(leaves: &[T]) -> Self {
 
         // Defensive guard against a panic on `levels.last().unwrap()`
@@ -89,7 +95,7 @@ impl MerkleTree {
             let current = levels.last().unwrap();
 
             // Pre-allocate the parent level with the right number of slots.
-            let mut next = Vec::with_capacity((current.len() + 1) / 2);
+            let mut next = Vec::with_capacity(current.len().div_ceil(2));
 
             // Split into two chunks representing the internal node children (left, right).
             for chunk in current.chunks(2) {
@@ -109,6 +115,7 @@ impl MerkleTree {
     }
 
     /// Returns the root [`Digest`], or `None` if the tree was built on an empty slice.
+    #[allow(unused)]
     pub fn root(&self) -> Option<Digest> {
         self.levels.last().map(|top| top[0])
     }
@@ -117,6 +124,7 @@ impl MerkleTree {
     ///
     /// Each entry is the sibling digest needed to recompute the parent at that level.
     /// Returns `None` if the tree is empty or `index` is out of bounds.
+    #[allow(unused)]
     pub fn prove(&self, index: usize) -> Option<Vec<Digest>> {
         if self.levels.is_empty() || index >= self.levels[0].len() {
             return None;
