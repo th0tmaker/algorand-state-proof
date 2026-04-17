@@ -4,19 +4,20 @@ use core::fmt;
 
 use keccak::Shake256;
 
+use crate::constants::SUMHASH512_DIGEST_SIZE;
+
 // ── Sumhash constants ─────────────────────────────────────────────────────────
 
 /// Number of message bytes consumed per compression (m_bytes − n × 8 = 128 − 64).
 const SUMHASH512_BLOCK_SIZE: usize = 64;
-/// Number of bytes in the final digest (n × 8 = 8 × 64-bit words = 512 bits).
-const SUMHASH512_DIGEST_SIZE: usize = 64;
 
 // ── Lookup table ──────────────────────────────────────────────────────────────
-/* Rather than handling individual bits per row on every compression, we
-precompute for every (row, byte_position, byte_value) triple the sum of these
-8 matrix columns corresponding to that byte's bits. Compression then reduces
-to one lookup + wrapping add per input byte per row — an 8× reduction over
-the naive bit-by-bit approach. */
+/* The lookup table is a performance optimization for the compression function.
+Rather than handling individual bits per row on every compression, we recompute
+for every (row, byte_position, byte_value) triple the sum of these 8 matrix 
+columns corresponding to that byte's bits. Compression then reduces to one
+lookup + wrapping add per input byte per row — an 8× reduction over the naive
+bit-by-bit approach. */
 
 /// Branchlessly accumulates the 8 matrix columns corresponding to the set bits
 /// in `byte`.
@@ -90,13 +91,10 @@ impl Sumhash {
         buffer length against which the position cursor is
         checking against.
 
-        For Algorand: (n=8, m=1024): 128 - 64 = 64 bytes.
-        Because the Algorand version of Sumhash512 uses 
-        the following fixed params:
+        For Algorand's fixed params (n=8, m=1024): 128 - 64
+        = 64 bytes.
 
-        (n=8, m=1024): 128 - 64 = 64 bytes
-        
-        For Algorand present use case, this step could be
+        For Algorand's present use case, this step could be
         avoided by just hardcoding the fixed values as a 
         constant. However, in our version we explore a 
         more generic Sumhash where the matrix can be 
@@ -248,6 +246,14 @@ impl Sumhash {
         }
     }
 
+    /// Resets the hasher to a fresh, zeroed state, making same instance reusable without full reconstruction.
+    pub(crate) fn reset(&mut self) {
+        self.state.fill(0);
+        self.buf.fill(0);
+        self.pos = 0;
+        self.total_len = 0;
+    }
+
     /// Finalises the hash by padding the input, encoding its length,
     /// processing the last block(s), and outputting the final state.
     /// 
@@ -261,7 +267,7 @@ impl Sumhash {
     /// 4. Write `total_len * 8` (bit count) as two LE `u64`s in `buf[P..B]`.
     /// 5. Compress the final padded block.
     /// 6. Serialize the state words as LE `u64`s into `out`.
-    pub(crate) fn finalize(mut self, out: &mut [u8]) {
+    pub(crate) fn finalize(&mut self, out: &mut [u8]) {
         let b = self.buf.len();  // block size
         let p = b - 16;  // padding threshold: last 16 bytes hold the length
 
@@ -325,22 +331,31 @@ impl fmt::Debug for Sumhash512 {
 }
 
 impl Sumhash512 {
-    /// Returns a Sumhash512 state ready to absorb input.
+    /// Returns a new instance of the hasher.
+    #[must_use]
     pub fn new() -> Self {
         let inner = Sumhash::new(8, 1024, b"Algorand");
         debug_assert_eq!(inner.buf.len(), SUMHASH512_BLOCK_SIZE);
         Self(inner)
     }
 
+    /// Feeds `data` into the hasher, compressing any full blocks.
     pub fn update(&mut self, data: &[u8]) {
         self.0.update(data);
     }
 
-    pub fn finalize(self, out: &mut [u8; SUMHASH512_DIGEST_SIZE]) {
+    /// Resets the hasher to a fresh, zeroed state, making same instance reusable without full reconstruction.
+    pub fn reset(&mut self) {
+        self.0.reset();
+    }
+
+    /// Finalises the hasher and returns the 64-byte digest.
+    pub fn finalize(&mut self, out: &mut [u8; SUMHASH512_DIGEST_SIZE]) {
         self.0.finalize(out);
     }
 
     /// Returns the immediate hash digest of input `data` computed in a single pass.
+    #[must_use]
     pub fn digest(data: impl AsRef<[u8]>) -> [u8; SUMHASH512_DIGEST_SIZE] {
         let mut h = Self::new();
         h.update(data.as_ref());
@@ -571,6 +586,26 @@ mod tests {
     fn digest_empty_is_nonzero() {
         let digest = Sumhash512::digest(b"");
         assert_ne!(digest, [0u8; SUMHASH512_DIGEST_SIZE]);
+    }
+
+    /// A reset hasher must produce the same digest as a freshly constructed one given the same input.
+    #[test]
+    fn reset_reuses_hasher() {
+        let mut h = Sumhash512::new();
+        h.update(TEST_MSG);
+        let mut first = [0u8; SUMHASH512_DIGEST_SIZE];
+        h.finalize(&mut first);
+
+        h.reset();
+        assert_eq!(h.0.pos, 0);
+        assert_eq!(h.0.total_len, 0);
+        assert!(h.0.state.iter().all(|&w| w == 0));
+
+        h.update(TEST_MSG);
+        let mut second = [0u8; SUMHASH512_DIGEST_SIZE];
+        h.finalize(&mut second);
+
+        assert_eq!(first, second);
     }
 
     /// KAT (known-answer test) vectors following go-sumhash's `testVector` in sumhash512_test.go.
