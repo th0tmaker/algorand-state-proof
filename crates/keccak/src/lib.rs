@@ -1,4 +1,4 @@
-// src/keccak.rs
+// crates/keccak/src/lib.rs
 
 use core::fmt;
 
@@ -127,7 +127,6 @@ impl fmt::Debug for Shake256 {
 
 impl Shake256 {
     /// Returns a zeroed sponge ready to absorb input.
-    #[must_use]
     pub fn new() -> Self {
         Self {
             state: [0u64; SHAKE256_STATE_WORDS],

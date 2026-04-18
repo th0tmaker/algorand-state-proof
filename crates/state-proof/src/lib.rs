@@ -1,6 +1,9 @@
+// crates/state-proof/src/lib.rs
+
 mod constants;
 mod types;
 mod sumhash;
+mod codec;
 mod merkle;
 
 pub use types::Digest;

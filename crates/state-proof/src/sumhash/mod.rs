@@ -1,4 +1,4 @@
-// src/sumhash/mod.rs
+// crates/state-proof/src/sumhash/mod.rs
 
 use core::fmt;
 
@@ -206,7 +206,7 @@ impl Sumhash {
         // The `total_len` is converted to bits (<<3) in `finalize()`, 
         // so it must fit in 61 bits.
         assert!(
-            (data.len() as u64) < (1u64 << 61) - self.total_len,
+            (data.len() as u64) < (1u64 << (u64::BITS - 3)) - self.total_len,
             "input too large: total_len << 3 would overflow u64 in finalize"
         );
 
@@ -333,7 +333,6 @@ impl fmt::Debug for Sumhash512 {
 
 impl Sumhash512 {
     /// Returns a new instance of the hasher.
-    #[must_use]
     pub fn new() -> Self {
         let inner = Sumhash::new(8, 1024, b"Algorand");
         debug_assert_eq!(inner.buf.len(), SUMHASH512_BLOCK_SIZE);
@@ -356,7 +355,6 @@ impl Sumhash512 {
     }
 
     /// Returns the immediate hash digest of input `data` computed in a single pass.
-    #[must_use]
     pub fn digest(data: impl AsRef<[u8]>) -> [u8; SUMHASH512_DIGEST_SIZE] {
         let mut h = Self::new();
         h.update(data.as_ref());
