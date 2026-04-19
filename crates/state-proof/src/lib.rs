@@ -1,11 +1,12 @@
 // crates/state-proof/src/lib.rs
 
-mod constants;
-mod types;
-mod sumhash;
 mod codec;
-mod merkle;
+mod stateproof;
 
-pub use types::Digest;
-pub use sumhash::Sumhash512;
-pub use merkle::Hashable;
+pub use merkle::{Digest, DIGEST_SIZE, Hashable, HashFactory, HashType, Proof};
+pub use stateproof::{
+    FalconPublicKey, FalconVerifier, FalconSignature,
+    MerkleVerifier, MerkleSignature,
+    SigSlotCommit, Participant, Reveal,
+    StateProof,
+};

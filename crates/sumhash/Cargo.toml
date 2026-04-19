@@ -1,0 +1,9 @@
+[package]
+name = "sumhash"
+version = "0.1.0"
+edition = "2024"
+description = "Algorand Sumhash512 — subset-sum hash function built on SHAKE256."
+license = "MIT"
+
+[dependencies]
+keccak = { path = "../keccak" }

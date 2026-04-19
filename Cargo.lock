@@ -6,9 +6,23 @@ version = 4
 name = "algorand-state-proof"
 version = "0.1.0"
 dependencies = [
- "keccak",
+ "merkle",
 ]
 
 [[package]]
 name = "keccak"
 version = "0.1.0"
+
+[[package]]
+name = "merkle"
+version = "0.1.0"
+dependencies = [
+ "sumhash",
+]
+
+[[package]]
+name = "sumhash"
+version = "0.1.0"
+dependencies = [
+ "keccak",
+]

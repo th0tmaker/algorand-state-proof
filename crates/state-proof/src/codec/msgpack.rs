@@ -1,99 +1,111 @@
 // crates/state-proof/src/codec/msgpack.rs
 
-// ── AlgorandMessagePack format constants ──────────────────────────────────────────────────
+// ── Format constants ──────────────────────────────────────────────────────────
+// Named constants are used by the write helpers only; the Reader matches raw
+// literals directly, where inline comments serve the same documentation purpose.
 
-const FIXMAP_BASE:   u8 = 0x80;
-const MAP16:         u8 = 0xde;
-const MAP32:         u8 = 0xdf;
+const FIXMAP_BASE: u8 = 0x80;
+const MAP16: u8 = 0xde;
+const MAP32: u8 = 0xdf;
 const FIXARRAY_BASE: u8 = 0x90;
-const ARRAY16:       u8 = 0xdc;
-const ARRAY32:       u8 = 0xdd;
-const FIXSTR_BASE:   u8 = 0xa0;
-const STR8:          u8 = 0xd9;
-const BIN8:          u8 = 0xc4;
-const BIN16:         u8 = 0xc5;
-const BIN32:         u8 = 0xc6;
-const UINT8:         u8 = 0xcc;
-const UINT16:        u8 = 0xcd;
-const UINT32:        u8 = 0xce;
-const UINT64:        u8 = 0xcf;
+const ARRAY16: u8 = 0xdc;
+const ARRAY32: u8 = 0xdd;
+const FIXSTR_BASE: u8 = 0xa0;
+const STR8: u8 = 0xd9;
+const BIN8: u8 = 0xc4;
+const BIN16: u8 = 0xc5;
+const BIN32: u8 = 0xc6;
+const UINT8: u8 = 0xcc;
+const UINT16: u8 = 0xcd;
+const UINT32: u8 = 0xce;
+const UINT64: u8 = 0xcf;
 
-// ── Write helpers (no intermediate allocation) ────────────────────────────────
+// ── Write helpers ─────────────────────────────────────────────────────────────
 
+/// Encodes a `u64` as the smallest `MessagePack` unsigned integer representation.
 fn write_uint(out: &mut Vec<u8>, v: u64) {
     match v {
         0..=0x7f => out.push(v as u8),
-        0x80..=0xff => { out.push(UINT8); out.push(v as u8); }
+        0x80..=0xff => { out.push(UINT8);  out.push(v as u8); }
         0x100..=0xffff => { out.push(UINT16); out.extend_from_slice(&(v as u16).to_be_bytes()); }
         0x10000..=0xffff_ffff => { out.push(UINT32); out.extend_from_slice(&(v as u32).to_be_bytes()); }
         _ => { out.push(UINT64); out.extend_from_slice(&v.to_be_bytes()); }
     }
 }
 
+/// Encodes a string with the appropriate `MessagePack` string prefix and length.
 fn write_str(out: &mut Vec<u8>, s: &str) {
     let b = s.as_bytes();
     match b.len() {
-        0..=31   => out.push(FIXSTR_BASE | b.len() as u8),
+        0..=31 => out.push(FIXSTR_BASE | b.len() as u8),
         32..=255 => { out.push(STR8); out.push(b.len() as u8); }
-        _        => panic!("codec key too long"),
+        _ => panic!("codec key too long"),
     }
     out.extend_from_slice(b);
 }
 
+/// Encodes a byte slice as `MessagePack` binary with the appropriate length prefix.
 fn write_bin(out: &mut Vec<u8>, b: &[u8]) {
     match b.len() {
-        0..=0xff     => { out.push(BIN8);  out.push(b.len() as u8); }
+        0..=0xff => { out.push(BIN8);  out.push(b.len() as u8); }
         0x100..=0xffff => { out.push(BIN16); out.extend_from_slice(&(b.len() as u16).to_be_bytes()); }
-        _            => { out.push(BIN32); out.extend_from_slice(&(b.len() as u32).to_be_bytes()); }
+        _ => { out.push(BIN32); out.extend_from_slice(&(b.len() as u32).to_be_bytes()); }
     }
     out.extend_from_slice(b);
 }
 
+/// Writes a `MessagePack` collection header (map/array), choosing fix, 16-bit, or 32-bit encoding based on size.
 fn write_collection_header(out: &mut Vec<u8>, n: usize, fix: u8, tag16: u8, tag32: u8) {
     match n {
-        0..=15      => out.push(fix | n as u8),
+        0..=15 => out.push(fix | n as u8),
         16..=0xffff => { out.push(tag16); out.extend_from_slice(&(n as u16).to_be_bytes()); }
-        _           => { out.push(tag32); out.extend_from_slice(&(n as u32).to_be_bytes()); }
+        _ => { out.push(tag32); out.extend_from_slice(&(n as u32).to_be_bytes()); }
     }
 }
 
+/// Writes a `MessagePack` map header for `n` key-value pairs.
 fn write_map_header(out: &mut Vec<u8>, n: usize) {
     write_collection_header(out, n, FIXMAP_BASE, MAP16, MAP32);
 }
 
+/// Writes a `MessagePack` array header for `n` elements.
 fn write_array_header(out: &mut Vec<u8>, n: usize) {
     write_collection_header(out, n, FIXARRAY_BASE, ARRAY16, ARRAY32);
 }
 
-// ── MsgPackEncode ─────────────────────────────────────────────────────────────
-
-/// Types that can be encoded as a canonical MessagePack map.
-pub(crate) trait MsgPackEncode {
-    fn to_msgpack(&self) -> AlgorandMessagePack;
-    fn encode(&self) -> Vec<u8> { self.to_msgpack().encode() }
-}
-
 // ── Value ─────────────────────────────────────────────────────────────────────
 
-// Typed storage; raw bytes are kept unencoded until encode_into() is called.
+// Typed storage for `AlgorandMessagePack` entries. Data is held in its native
+// form and serialized only when `encode_into()` is called on the containing map.
 enum Value {
+    /// Unsigned integer value.
     Uint(u64),
+    /// Raw binary blob.
     Bin(Vec<u8>),
+    /// Array of binary blobs.
     BinArray(Vec<Vec<u8>>),
+    /// Array of unsigned integers.
+    UintArray(Vec<u64>),
+    /// Integer-keyed map; keys are sorted numerically during encoding for deterministic ordering.
+    UintKeyedMap(Vec<(u64, AlgorandMessagePack)>),
+    /// Nested MessagePack map with string keys.
     Map(AlgorandMessagePack),
 }
 
-// ── AlgorandMessagePack ───────────────────────────────────────────────────────────────────
+// ── AlgorandMessagePack ───────────────────────────────────────────────────────
 
 /// Canonical MessagePack map builder (Algorand-compatible).
 ///
 /// Keys are sorted lexicographically on [`encode`](AlgorandMessagePack::encode);
 /// zero and empty fields are omitted automatically.
 pub(crate) struct AlgorandMessagePack {
+    /// Holds ordered key-value pairs for Algorand MessagePack encoding, where
+    /// the key is a string tag and the value is a variant of [`Value`].
     entries: Vec<(&'static str, Value)>,
 }
 
 impl AlgorandMessagePack {
+    // Creates a new instance of the serialization format ready to append input data
     pub(crate) fn new() -> Self {
         Self { entries: Vec::new() }
     }
@@ -123,6 +135,22 @@ impl AlgorandMessagePack {
         self
     }
 
+    /// Appends an array-of-u64 field; omitted if `items` is empty.
+    pub(crate) fn uint_array(mut self, key: &'static str, items: &[u64]) -> Self {
+        if !items.is_empty() {
+            self.entries.push((key, Value::UintArray(items.to_vec())));
+        }
+        self
+    }
+
+    /// Appends an integer-keyed map field; omitted if `entries` is empty.
+    pub(crate) fn uint_keyed_map(mut self, key: &'static str, entries: Vec<(u64, AlgorandMessagePack)>) -> Self {
+        if !entries.is_empty() {
+            self.entries.push((key, Value::UintKeyedMap(entries)));
+        }
+        self
+    }
+
     /// Appends a nested map field; omitted if the inner map has no entries.
     pub(crate) fn map(mut self, key: &'static str, inner: AlgorandMessagePack) -> Self {
         if !inner.entries.is_empty() {
@@ -131,20 +159,31 @@ impl AlgorandMessagePack {
         self
     }
 
-    /// Sorts keys and emits canonical MessagePack bytes into `out`.
+    // Sorts keys lexicographically (Algorand canonical ordering requirement) and
+    // writes the map into `out`. Called recursively for nested Value::Map entries.
     fn encode_into(mut self, out: &mut Vec<u8>) {
         self.entries.sort_unstable_by_key(|(k, _)| *k);
         write_map_header(out, self.entries.len());
         for (key, value) in self.entries {
             write_str(out, key);
             match value {
-                Value::Uint(v)        => write_uint(out, v),
-                Value::Bin(b)         => write_bin(out, &b),
+                Value::Uint(v) => write_uint(out, v),
+                Value::Bin(b) => write_bin(out, &b),
                 Value::BinArray(items) => {
                     write_array_header(out, items.len());
                     for item in items { write_bin(out, &item); }
                 }
-                Value::Map(inner)     => inner.encode_into(out),
+                Value::UintArray(items) => {
+                    write_array_header(out, items.len());
+                    for v in items { write_uint(out, v); }
+                }
+                Value::UintKeyedMap(mut entries) => {
+                    // Integer-keyed maps sort numerically per Algorand canonical ordering.
+                    entries.sort_unstable_by_key(|(k, _)| *k);
+                    write_map_header(out, entries.len());
+                    for (k, v) in entries { write_uint(out, k); v.encode_into(out); }
+                }
+                Value::Map(inner) => inner.encode_into(out),
             }
         }
     }
@@ -155,6 +194,17 @@ impl AlgorandMessagePack {
         self.encode_into(&mut out);
         out
     }
+}
+
+// ── MsgPackEncode ─────────────────────────────────────────────────────────────
+
+/// Types that can be encoded as a canonical MessagePack map.
+pub(crate) trait MsgPackEncode {
+    /// Converts into an intermediate [`AlgorandMessagePack`] type.
+    fn to_msgpack(&self) -> AlgorandMessagePack;
+
+    /// Encodes directly into canonical [`AlgorandMessagePack`] bytes.
+    fn encode(&self) -> Vec<u8> { self.to_msgpack().encode() }
 }
 
 // ── DecodeError ───────────────────────────────────────────────────────────────
@@ -178,14 +228,17 @@ pub(crate) struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
+    /// Creates a new reader over the provided byte slice.
     pub(crate) fn new(data: &'a [u8]) -> Self {
         Self { data, pos: 0 }
     }
 
+    /// Returns the number of unread bytes remaining.
     pub(crate) fn remaining(&self) -> usize {
         self.data.len() - self.pos
     }
 
+    /// Reads a single byte and advances the cursor.
     fn read_byte(&mut self) -> Result<u8, DecodeError> {
         if self.pos >= self.data.len() { return Err(DecodeError::UnexpectedEof); }
         let b = self.data[self.pos];
@@ -193,6 +246,7 @@ impl<'a> Reader<'a> {
         Ok(b)
     }
 
+    /// Reads `n` bytes as a slice and advances the cursor.
     fn read_bytes(&mut self, n: usize) -> Result<&'a [u8], DecodeError> {
         if self.pos + n > self.data.len() { return Err(DecodeError::UnexpectedEof); }
         let slice = &self.data[self.pos..self.pos + n];
@@ -200,116 +254,126 @@ impl<'a> Reader<'a> {
         Ok(slice)
     }
 
+    /// Reads a big-endian `u16` value.
     fn read_u16(&mut self) -> Result<u16, DecodeError> {
         let b = self.read_bytes(2)?;
         Ok(u16::from_be_bytes([b[0], b[1]]))
     }
 
+    /// Reads a big-endian `u32` value.
     fn read_u32(&mut self) -> Result<u32, DecodeError> {
         let b = self.read_bytes(4)?;
         Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
     }
 
+    /// Reads a big-endian `u64` value.
     fn read_u64(&mut self) -> Result<u64, DecodeError> {
         let b = self.read_bytes(8)?;
         Ok(u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
     }
 
+    /// Reads a `MessagePack` map header and returns the number of key-value pairs.
     pub(crate) fn read_map_len(&mut self) -> Result<usize, DecodeError> {
         let b = self.read_byte()?;
         match b {
             0x80..=0x8f => Ok((b & 0x0f) as usize),
-            0xde        => Ok(self.read_u16()? as usize),
-            0xdf        => Ok(self.read_u32()? as usize),
-            _           => Err(DecodeError::UnexpectedType { expected: "map", got: b }),
+            0xde => Ok(self.read_u16()? as usize),
+            0xdf => Ok(self.read_u32()? as usize),
+            _ => Err(DecodeError::UnexpectedType { expected: "map", got: b }),
         }
     }
 
+    /// Reads a `MessagePack` array header and returns the number of elements.
     pub(crate) fn read_array_len(&mut self) -> Result<usize, DecodeError> {
         let b = self.read_byte()?;
         match b {
             0x90..=0x9f => Ok((b & 0x0f) as usize),
-            0xdc        => Ok(self.read_u16()? as usize),
-            0xdd        => Ok(self.read_u32()? as usize),
-            _           => Err(DecodeError::UnexpectedType { expected: "array", got: b }),
+            0xdc => Ok(self.read_u16()? as usize),
+            0xdd => Ok(self.read_u32()? as usize),
+            _ => Err(DecodeError::UnexpectedType { expected: "array", got: b }),
         }
     }
 
+    /// Reads a `MessagePack` string and returns it as a UTF-8 `&str`.
     pub(crate) fn read_str(&mut self) -> Result<&'a str, DecodeError> {
         let b = self.read_byte()?;
         let len = match b {
             0xa0..=0xbf => (b & 0x1f) as usize,
-            0xd9        => self.read_byte()? as usize,
-            0xda        => self.read_u16()? as usize,
-            0xdb        => self.read_u32()? as usize,
-            _           => return Err(DecodeError::UnexpectedType { expected: "str", got: b }),
+            0xd9 => self.read_byte()? as usize,
+            0xda => self.read_u16()? as usize,
+            0xdb => self.read_u32()? as usize,
+            _ => return Err(DecodeError::UnexpectedType { expected: "str", got: b }),
         };
         std::str::from_utf8(self.read_bytes(len)?).map_err(|_| DecodeError::InvalidUtf8)
     }
 
+    /// Reads a `MessagePack` unsigned integer and returns it as `u64`.
     pub(crate) fn read_uint(&mut self) -> Result<u64, DecodeError> {
         let b = self.read_byte()?;
         match b {
             0x00..=0x7f => Ok(b as u64),
-            0xcc        => Ok(self.read_byte()? as u64),
-            0xcd        => Ok(self.read_u16()? as u64),
-            0xce        => Ok(self.read_u32()? as u64),
-            0xcf        => self.read_u64(),
-            _           => Err(DecodeError::UnexpectedType { expected: "uint", got: b }),
+            0xcc => Ok(self.read_byte()? as u64),
+            0xcd => Ok(self.read_u16()? as u64),
+            0xce => Ok(self.read_u32()? as u64),
+            0xcf => self.read_u64(),
+            _ => Err(DecodeError::UnexpectedType { expected: "uint", got: b }),
         }
     }
 
+    /// Reads a `MessagePack` binary value and returns it as a byte slice.
     pub(crate) fn read_bin(&mut self) -> Result<&'a [u8], DecodeError> {
         let b = self.read_byte()?;
         let len = match b {
             0xc4 => self.read_byte()? as usize,
             0xc5 => self.read_u16()? as usize,
             0xc6 => self.read_u32()? as usize,
-            _    => return Err(DecodeError::UnexpectedType { expected: "bin", got: b }),
+            _ => return Err(DecodeError::UnexpectedType { expected: "bin", got: b }),
         };
         self.read_bytes(len)
     }
 
-    /// Skips one complete MessagePack value (used for unknown map keys).
+    /// Skips one complete `MessagePack` value. Handles all MsgPack types,
+    /// including nested maps and arrays by recursing once per contained 
+    /// element. Used to step past unknown keys during map decoding.
     pub(crate) fn skip(&mut self) -> Result<(), DecodeError> {
         let b = self.read_byte()?;
         match b {
-            0x00..=0x7f => Ok(()),                                               // positive fixint
-            0x80..=0x8f => { for _ in 0..(b & 0x0f) * 2 { self.skip()?; } Ok(()) } // fixmap
-            0x90..=0x9f => { for _ in 0..(b & 0x0f)     { self.skip()?; } Ok(()) } // fixarray
-            0xa0..=0xbf => { self.read_bytes((b & 0x1f) as usize)?; Ok(()) }    // fixstr
-            0xc0        => Ok(()),                                               // nil
-            0xc2 | 0xc3 => Ok(()),                                              // bool
-            0xc4        => { let n = self.read_byte()? as usize;  self.read_bytes(n)?; Ok(()) }
-            0xc5        => { let n = self.read_u16()? as usize;   self.read_bytes(n)?; Ok(()) }
-            0xc6        => { let n = self.read_u32()? as usize;   self.read_bytes(n)?; Ok(()) }
-            0xc7        => { let n = self.read_byte()? as usize;  self.read_bytes(n + 1)?; Ok(()) } // ext8
-            0xc8        => { let n = self.read_u16()? as usize;   self.read_bytes(n + 1)?; Ok(()) } // ext16
-            0xc9        => { let n = self.read_u32()? as usize;   self.read_bytes(n + 1)?; Ok(()) } // ext32
-            0xca        => { self.read_bytes(4)?; Ok(()) }                      // float32
-            0xcb        => { self.read_bytes(8)?; Ok(()) }                      // float64
-            0xcc        => { self.read_byte()?;   Ok(()) }                      // uint8
-            0xcd        => { self.read_bytes(2)?; Ok(()) }                      // uint16
-            0xce        => { self.read_bytes(4)?; Ok(()) }                      // uint32
-            0xcf        => { self.read_bytes(8)?; Ok(()) }                      // uint64
-            0xd0        => { self.read_byte()?;   Ok(()) }                      // int8
-            0xd1        => { self.read_bytes(2)?; Ok(()) }                      // int16
-            0xd2        => { self.read_bytes(4)?; Ok(()) }                      // int32
-            0xd3        => { self.read_bytes(8)?; Ok(()) }                      // int64
-            0xd4        => { self.read_bytes(2)?;  Ok(()) }                     // fixext1
-            0xd5        => { self.read_bytes(3)?;  Ok(()) }                     // fixext2
-            0xd6        => { self.read_bytes(5)?;  Ok(()) }                     // fixext4
-            0xd7        => { self.read_bytes(9)?;  Ok(()) }                     // fixext8
-            0xd8        => { self.read_bytes(17)?; Ok(()) }                     // fixext16
-            0xd9        => { let n = self.read_byte()? as usize;  self.read_bytes(n)?; Ok(()) } // str8
-            0xda        => { let n = self.read_u16()? as usize;   self.read_bytes(n)?; Ok(()) } // str16
-            0xdb        => { let n = self.read_u32()? as usize;   self.read_bytes(n)?; Ok(()) } // str32
-            0xdc        => { let n = self.read_u16()? as usize; for _ in 0..n     { self.skip()?; } Ok(()) } // array16
-            0xdd        => { let n = self.read_u32()? as usize; for _ in 0..n     { self.skip()?; } Ok(()) } // array32
-            0xde        => { let n = self.read_u16()? as usize; for _ in 0..n * 2 { self.skip()?; } Ok(()) } // map16
-            0xdf        => { let n = self.read_u32()? as usize; for _ in 0..n * 2 { self.skip()?; } Ok(()) } // map32
-            0xe0..=0xff => Ok(()),                                               // negative fixint
-            _ => Err(DecodeError::UnexpectedType { expected: "any", got: b }), // 0xc1: never used per spec
+            0x00..=0x7f => Ok(()),  // positive fixint
+            0x80..=0x8f => { for _ in 0..(b & 0x0f) * 2 { self.skip()?; } Ok(()) }  // fixmap
+            0x90..=0x9f => { for _ in 0..(b & 0x0f) { self.skip()?; } Ok(()) }  // fixarray
+            0xa0..=0xbf => { self.read_bytes((b & 0x1f) as usize)?; Ok(()) }  // fixstr
+            0xc0 => Ok(()),  // nil
+            0xc2 | 0xc3 => Ok(()),  // bool
+            0xc4 => { let n = self.read_byte()? as usize; self.read_bytes(n)?; Ok(()) }
+            0xc5 => { let n = self.read_u16()? as usize; self.read_bytes(n)?; Ok(()) }
+            0xc6 => { let n = self.read_u32()? as usize; self.read_bytes(n)?; Ok(()) }
+            0xc7 => { let n = self.read_byte()? as usize; self.read_bytes(n + 1)?; Ok(()) }  // ext8
+            0xc8 => { let n = self.read_u16()? as usize; self.read_bytes(n + 1)?; Ok(()) }  // ext16
+            0xc9 => { let n = self.read_u32()? as usize; self.read_bytes(n + 1)?; Ok(()) }  // ext32
+            0xca => { self.read_bytes(4)?; Ok(()) }  // float32
+            0xcb => { self.read_bytes(8)?; Ok(()) }  // float64
+            0xcc => { self.read_byte()?;   Ok(()) }  // uint8
+            0xcd => { self.read_bytes(2)?; Ok(()) }  // uint16
+            0xce => { self.read_bytes(4)?; Ok(()) }  // uint32
+            0xcf => { self.read_bytes(8)?; Ok(()) }  // uint64
+            0xd0 => { self.read_byte()?;   Ok(()) }  // int8
+            0xd1 => { self.read_bytes(2)?; Ok(()) }  // int16
+            0xd2 => { self.read_bytes(4)?; Ok(()) }  // int32
+            0xd3 => { self.read_bytes(8)?; Ok(()) }  // int64
+            0xd4 => { self.read_bytes(2)?;  Ok(()) }  // fixext1
+            0xd5 => { self.read_bytes(3)?;  Ok(()) }  // fixext2
+            0xd6 => { self.read_bytes(5)?;  Ok(()) }  // fixext4
+            0xd7 => { self.read_bytes(9)?;  Ok(()) }  // fixext8
+            0xd8 => { self.read_bytes(17)?; Ok(()) }  // fixext16
+            0xd9 => { let n = self.read_byte()? as usize; self.read_bytes(n)?; Ok(()) } // str8
+            0xda => { let n = self.read_u16()? as usize; self.read_bytes(n)?; Ok(()) } // str16
+            0xdb => { let n = self.read_u32()? as usize; self.read_bytes(n)?; Ok(()) } // str32
+            0xdc => { let n = self.read_u16()? as usize; for _ in 0..n { self.skip()?; } Ok(()) } // array16
+            0xdd => { let n = self.read_u32()? as usize; for _ in 0..n { self.skip()?; } Ok(()) } // array32
+            0xde => { let n = self.read_u16()? as usize; for _ in 0..n * 2 { self.skip()?; } Ok(()) } // map16
+            0xdf => { let n = self.read_u32()? as usize; for _ in 0..n * 2 { self.skip()?; } Ok(()) } // map32
+            0xe0..=0xff => Ok(()),  // negative fixint
+            _ => Err(DecodeError::UnexpectedType { expected: "any", got: b }),  // 0xc1: never used per spec
         }
     }
 }
@@ -318,15 +382,18 @@ impl<'a> Reader<'a> {
 
 /// Types that can be decoded from a canonical MessagePack byte slice.
 pub(crate) trait MsgPackDecode: Sized {
-    fn decode(r: &mut Reader<'_>) -> Result<Self, DecodeError>;
-}
+    /// Decodes one value from a shared [`Reader`] cursor; used when parsing a field
+    /// within a larger structure. Does not check for trailing bytes.
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError>;
 
-/// Decodes `T` from a canonical MessagePack byte slice.
-pub(crate) fn from_msgpack<T: MsgPackDecode>(bytes: &[u8]) -> Result<T, DecodeError> {
-    let mut r = Reader::new(bytes);
-    let val = T::decode(&mut r)?;
-    if r.remaining() > 0 { return Err(DecodeError::TrailingBytes); }
-    Ok(val)
+    /// Decodes `Self` from a complete byte slice. Returns [`DecodeError::TrailingBytes`]
+    /// if any bytes remain unconsumed after the value, guarding against truncated reads.
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        let mut r = Reader::new(bytes);
+        let val = Self::decode_from(&mut r)?;
+        if r.remaining() > 0 { return Err(DecodeError::TrailingBytes); }
+        Ok(val)
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -458,6 +525,52 @@ mod tests {
         ]);
     }
 
+    // ── Encode: uint_array and uint_keyed_map ────────────────────────────────
+
+    /// A uint_array field encodes as a fixarray of fixints.
+    #[test]
+    fn uint_array_encoding() {
+        let out = AlgorandMessagePack::new().uint_array("pr", &[1, 2, 3]).encode();
+        assert_eq!(out, vec![
+            0x81,               // fixmap(1)
+            0xa2, b'p', b'r',   // fixstr "pr"
+            0x93,               // fixarray(3)
+            0x01, 0x02, 0x03,   // fixints
+        ]);
+    }
+
+    /// uint_array field is omitted when empty.
+    #[test]
+    fn uint_array_empty_omitted() {
+        assert_eq!(AlgorandMessagePack::new().uint_array("pr", &[]).encode(), vec![0x80]);
+    }
+
+    /// Integer-keyed map encodes with uint keys sorted numerically.
+    #[test]
+    fn uint_keyed_map_encoding() {
+        // Insert in reverse order to verify numeric sort.
+        let entries = vec![
+            (2u64, AlgorandMessagePack::new().uint("v", 20)),
+            (1u64, AlgorandMessagePack::new().uint("v", 10)),
+        ];
+        let out = AlgorandMessagePack::new().uint_keyed_map("r", entries).encode();
+        let mut r = Reader::new(&out);
+        assert_eq!(r.read_map_len().unwrap(), 1);   // outer map
+        assert_eq!(r.read_str().unwrap(), "r");
+        assert_eq!(r.read_map_len().unwrap(), 2);   // inner uint-keyed map
+        assert_eq!(r.read_uint().unwrap(), 1);      // key 1 comes first
+        r.read_map_len().unwrap(); r.read_str().unwrap(); assert_eq!(r.read_uint().unwrap(), 10);
+        assert_eq!(r.read_uint().unwrap(), 2);      // key 2 comes second
+        r.read_map_len().unwrap(); r.read_str().unwrap(); assert_eq!(r.read_uint().unwrap(), 20);
+        assert_eq!(r.remaining(), 0);
+    }
+
+    /// Integer-keyed map field is omitted when empty.
+    #[test]
+    fn uint_keyed_map_empty_omitted() {
+        assert_eq!(AlgorandMessagePack::new().uint_keyed_map("r", vec![]).encode(), vec![0x80]);
+    }
+
     // ── Decode: Reader basics ─────────────────────────────────────────────────
 
     /// Reader must parse fixmap, fixstr key, and fixint value correctly.
@@ -526,13 +639,13 @@ mod tests {
     fn from_msgpack_trailing_bytes_error() {
         struct Dummy;
         impl MsgPackDecode for Dummy {
-            fn decode(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+            fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
                 r.read_map_len()?;
                 Ok(Dummy)
             }
         }
         let bytes = vec![0x80, 0xff]; // empty map + stray byte
-        assert!(matches!(from_msgpack::<Dummy>(&bytes), Err(DecodeError::TrailingBytes)));
+        assert!(matches!(Dummy::decode(&bytes), Err(DecodeError::TrailingBytes)));
     }
 
     // ── Round-trips ───────────────────────────────────────────────────────────
@@ -547,7 +660,7 @@ mod tests {
             }
         }
         impl MsgPackDecode for Wrapper {
-            fn decode(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+            fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
                 let n = r.read_map_len()?;
                 let mut v = 0u64;
                 for _ in 0..n {
@@ -561,7 +674,7 @@ mod tests {
         }
         for val in [1u64, 0x80, 0x100, 0x10000, 0x1_0000_0000] {
             let encoded = Wrapper(val).encode();
-            let decoded = from_msgpack::<Wrapper>(&encoded).unwrap();
+            let decoded = Wrapper::decode(&encoded).unwrap();
             assert_eq!(decoded.0, val);
         }
     }
@@ -576,7 +689,7 @@ mod tests {
             }
         }
         impl MsgPackDecode for Wrapper {
-            fn decode(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+            fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
                 let n = r.read_map_len()?;
                 let mut d = vec![];
                 for _ in 0..n {
@@ -590,7 +703,7 @@ mod tests {
         }
         let data = vec![0xde, 0xad, 0xbe, 0xef];
         let encoded = Wrapper(data.clone()).encode();
-        let decoded = from_msgpack::<Wrapper>(&encoded).unwrap();
+        let decoded = Wrapper::decode(&encoded).unwrap();
         assert_eq!(decoded.0, data);
     }
 }

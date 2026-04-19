@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "crates/keccak",
+    "crates/sumhash",
+    "crates/merkle",
     "crates/state-proof",
 ]
 resolver = "2"

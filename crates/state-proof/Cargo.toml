@@ -6,4 +6,4 @@ description = "Cryptographic attestation of Algorand ledger state across a block
 license = "MIT"
 
 [dependencies]
-keccak = { path = "../keccak" }
+merkle = { path = "../merkle" }
