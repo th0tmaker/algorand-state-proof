@@ -2,8 +2,10 @@
 name = "algorand-state-proof"
 version = "0.1.0"
 edition = "2024"
-description = "Cryptographic attestation of Algorand ledger state across a block range — enables trustless, lightweight, quantum-secure verification without running a node."
+description = "Cryptographic attestation of Algorand's ledger state across a block range — enables trustless, lightweight, quantum-secure verification without running a node."
 license = "MIT"
 
 [dependencies]
-merkle = { path = "../merkle" }
+keccak  = { path = "../keccak" }
+merkle  = { path = "../merkle" }
+algorand-falcon-keys = { git = "https://github.com/th0tmaker/algorand-falcon-keys", rev = "66cf0571e4b3d7b71252be8d5ed51e1628260de0" }

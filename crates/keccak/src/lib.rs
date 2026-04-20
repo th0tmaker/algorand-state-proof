@@ -1,10 +1,13 @@
 // crates/keccak/src/lib.rs
 
+mod zeroize;
+pub use zeroize::Zeroize;
+
 use core::fmt;
 
 
 // ── Shake256 internals ────────────────────────────────────────────────────────
-//
+
 /// Number of u64 lanes in the Keccak-f[1600] state (1600 bits / 64 = 25).
 const SHAKE256_STATE_WORDS: usize = 25;
 /// Bytes absorbed or squeezed per permutation call (1600 − 2×256 = 1088 bits = 136 bytes).
@@ -41,7 +44,7 @@ const RC: [u64; 24] = [
 /// Runs 24 rounds of the five-step sequence θ, ρ, π, χ, ι over a 25-word/lane
 /// (1600-bit) state. This is the core primitive underlying SHAKE256 and SHA-3.
 pub (crate) fn keccak_f(state: &mut [u64; SHAKE256_STATE_WORDS]) {
-    // Iterate over the round counstants one value at a time 
+    // Iterate over the round constants one value at a time. 
     for &rc in RC.iter() {
         // Step 1: θ — column parity mixing:
         // C[x] = XOR of all words/lanes in column x.
@@ -100,8 +103,7 @@ pub (crate) fn keccak_f(state: &mut [u64; SHAKE256_STATE_WORDS]) {
 /// Wraps a 1600-bit Keccak-f[1600] permutation state with a rate-sized input
 /// buffer. Input is absorbed in 136-byte blocks; after `flip()`, output
 /// bytes are squeezed from the same state one block at a time.
-#[derive(Clone)]
-#[cfg_attr(test, derive(Eq, PartialEq))]
+#[derive(Clone, Eq, PartialEq)]
 pub struct Shake256 {
     /// The 1600-bit (200-byte) Keccak-f[1600] permutation state, stored as 25 × u64 words/lanes.
     state: [u64; SHAKE256_STATE_WORDS],
@@ -122,6 +124,13 @@ impl fmt::Debug for Shake256 {
             .field("pos", &self.pos)
             .field("squeezing", &self.squeezing)
             .finish_non_exhaustive()
+    }
+}
+
+impl Drop for Shake256 {
+    fn drop(&mut self) {
+        self.state.zeroize();
+        self.buf.zeroize();
     }
 }
 

@@ -3,9 +3,10 @@
 mod codec;
 mod stateproof;
 
-pub use merkle::{Digest, DIGEST_SIZE, Hashable, HashFactory, HashType, Proof};
+pub use merkle::{Sumhash512Digest, SUMHASH512_DIGEST_SIZE, Hashable, HashFactory, HashType, Proof};
+pub use algorand_falcon_keys::{PublicKey as FalconPublicKey, CompressedSignature as FalconCompressedSig};
 pub use stateproof::{
-    FalconPublicKey, FalconVerifier, FalconSignature,
+    FalconVerifier, FalconSignature,
     MerkleVerifier, MerkleSignature,
     SigSlotCommit, Participant, Reveal,
     StateProof,

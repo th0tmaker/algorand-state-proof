@@ -1,69 +1,79 @@
 // crates/state-proof/src/stateproof/mod.rs
 
-use merkle::{Digest, DIGEST_SIZE, Proof};
+mod coin;
+#[allow(unused)]
+pub use coin::{CoinChoiceSeed, CoinGenerator, ln_int_approximation};
+
+use algorand_falcon_keys::{CompressedSignature, PublicKey, FALCON_DET1024_PUBKEY_SIZE};
+use merkle::{Sumhash512Digest, SUMHASH512_DIGEST_SIZE, Proof};
 
 use crate::codec::{DecodeError, MsgPackDecode, Reader};
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-/// Byte length of a Falcon-512 public key.
-const FALCON_PUBLIC_KEY_SIZE: usize = 897;
-
-// ── FalconPublicKey ───────────────────────────────────────────────────────────
-
-/// A Falcon public key used to verify a single-round ephemeral signature.
-/// Heap-allocated to avoid placing ~900 bytes on the stack.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FalconPublicKey(pub Box<[u8]>);
-
-impl Default for FalconPublicKey {
-    fn default() -> Self {
-        Self(vec![0u8; FALCON_PUBLIC_KEY_SIZE].into_boxed_slice())
-    }
-}
-
-impl MsgPackDecode for FalconPublicKey {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
-        let b = r.read_bin()?;
-        if b.len() != FALCON_PUBLIC_KEY_SIZE {
-            return Err(DecodeError::InvalidDigestSize(b.len()));
-        }
-        Ok(Self(b.to_vec().into_boxed_slice()))
-    }
-}
-
 // ── FalconVerifier ────────────────────────────────────────────────────────────
 
-/// Wraps a Falcon public key; used to verify a single round's ephemeral signature.
-/// Codec key: `"k"`.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+/// Wraps around a deterministic `Falcon-1024` [`PublicKey`];
+/// used to verify a single round's ephemeral [`CompressedSignature`].
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FalconVerifier {
-    pub public_key: FalconPublicKey, // "k"
+    /// Deterministic Falcon-1024 [`PublicKey`]; Wire codec key: `"k"` 
+    pub public_key: PublicKey  // "k"
+}
+
+impl Default for FalconVerifier {
+    fn default() -> Self {
+        Self { public_key: PublicKey::from_bytes(&[0u8; FALCON_DET1024_PUBKEY_SIZE]).unwrap() }
+    }
 }
 
 impl MsgPackDecode for FalconVerifier {
     fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
-        let mut public_key = FalconPublicKey::default();
+        let mut bytes = [0u8; FALCON_DET1024_PUBKEY_SIZE];
         for _ in 0..n {
             match r.read_str()? {
-                "k" => public_key = FalconPublicKey::decode_from(r)?,
-                _   => r.skip()?,
+                "k" => {
+                    let b = r.read_bin()?;
+                    if b.len() != FALCON_DET1024_PUBKEY_SIZE {
+                        return Err(DecodeError::InvalidDigestSize(b.len()));
+                    }
+                    bytes.copy_from_slice(b);
+                }
+                _ => r.skip()?,
             }
         }
+        let public_key = PublicKey::from_bytes(&bytes)
+            .map_err(|_| DecodeError::InvalidDigestSize(0))?;
         Ok(Self { public_key })
     }
 }
 
 // ── FalconSignature ───────────────────────────────────────────────────────────
 
-/// A variable-length Falcon signature byte blob. Codec key: `"sig"`.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct FalconSignature(pub Vec<u8>);
+/// Wraps around a variable-length deterministic `Falcon-1024` [`CompressedSignature`].
+/// Codec key: `"sig"`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FalconSignature {
+    /// a Falcon-1024 [`CompressedSignature`]; Wire codec key: `"sig"` 
+    pub sig: CompressedSignature, // "sig"
+}
+
+impl Default for FalconSignature {
+    fn default() -> Self {
+        // Minimal valid compressed-signature shell: header byte + 1-byte salt version.
+        Self {
+            sig: CompressedSignature::from_bytes(
+                &[algorand_falcon_keys::FALCON_DET1024_SIG_COMPRESSED_HEADER, 0]).unwrap()
+        }
+    }
+}
 
 impl MsgPackDecode for FalconSignature {
     fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
-        Ok(Self(r.read_bin()?.to_vec()))
+        // Falcon signature is encoded as binary on the wire; raw blob of bytes 
+        let b = r.read_bin()?;
+        CompressedSignature::from_bytes(b)
+            .map(|sig| Self { sig })
+            .map_err(|_| DecodeError::InvalidDigestSize(b.len()))
     }
 }
 
@@ -73,32 +83,37 @@ impl MsgPackDecode for FalconSignature {
 /// Codec keys: `"cmt"` (commitment root), `"lf"` (key lifetime in rounds).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MerkleVerifier {
-    pub commitment:   Digest, // "cmt"
-    pub key_lifetime: u64,    // "lf"
+    /// The commitment is a [`Sumhash512Digest`]; Wire codec key: `"cmt"` 
+    pub commitment: Sumhash512Digest,  // "cmt"
+    /// The interval (in rounds) between ephemeral key rotations. Specifically,
+    /// a [`FalconVerifier`] (ephemeral [`PublicKey`]) at index i in the Merkle
+    /// [`merkle::VcTree`] is valid for signing round `first_valid + i * key_lifetime`;
+    /// Wire codec key: `"lf"`
+    pub key_lifetime: u64,  // "lf"
 }
 
 impl Default for MerkleVerifier {
     fn default() -> Self {
-        Self { commitment: [0u8; DIGEST_SIZE], key_lifetime: 0 }
+        Self { commitment: [0u8; SUMHASH512_DIGEST_SIZE], key_lifetime: 0 }
     }
 }
 
 impl MsgPackDecode for MerkleVerifier {
     fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
-        let mut commitment = [0u8; DIGEST_SIZE];
+        let mut commitment = [0u8; SUMHASH512_DIGEST_SIZE];
         let mut key_lifetime = 0u64;
         for _ in 0..n {
             match r.read_str()? {
                 "cmt" => {
                     let b = r.read_bin()?;
-                    if b.len() != DIGEST_SIZE {
+                    if b.len() != SUMHASH512_DIGEST_SIZE {
                         return Err(DecodeError::InvalidDigestSize(b.len()));
                     }
                     commitment.copy_from_slice(b);
                 }
                 "lf" => key_lifetime = r.read_uint()?,
-                _    => r.skip()?,
+                _ => r.skip()?,
             }
         }
         Ok(Self { commitment, key_lifetime })
@@ -107,24 +122,30 @@ impl MsgPackDecode for MerkleVerifier {
 
 // ── MerkleSignature ───────────────────────────────────────────────────────────
 
-/// A single-round Falcon signature bundled with its Merkle membership proof,
-/// proving that the signing key is committed to in the participant's long-term tree.
+/// A single-round [`FalconSignature`] bundled with its Merkle membership 
+/// [`merkle::Proof`], proving that the signing [`FalconVerifier::public_key`]
+/// is committed to in the participant's long-term [`merkle::VcTree`].
 ///
 /// Codec keys: `"sig"`, `"idx"`, `"prf"`, `"vkey"`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MerkleSignature {
-    pub sig:          FalconSignature, // "sig"
-    pub vc_index:     u64,             // "idx"
-    pub proof:        Proof,           // "prf"
-    pub verifying_key: FalconVerifier, // "vkey"
+    /// A single-round [`FalconSignature`].
+    pub sig: FalconSignature,  // "sig"
+    /// The leaf index in the Merkle [`merkle::VcTree`] that
+    /// identifies which key was used to sign.
+    pub vc_index: u64,  // "idx"
+    /// Merkle membership [`merkle::Proof`].
+    pub proof: Proof,  // "prf"
+    /// Participant signing [`FalconVerifier::public_key`].
+    pub verifying_key: FalconVerifier,  // "vkey"
 }
 
 impl Default for MerkleSignature {
     fn default() -> Self {
         Self {
-            sig:          FalconSignature::default(),
-            vc_index:     0,
-            proof:        Proof::new(0, vec![]),
+            sig: FalconSignature::default(),
+            vc_index: 0,
+            proof: Proof::new(0, vec![]),
             verifying_key: FalconVerifier::default(),
         }
     }
@@ -136,11 +157,11 @@ impl MsgPackDecode for MerkleSignature {
         let mut out = MerkleSignature::default();
         for _ in 0..n {
             match r.read_str()? {
-                "sig"  => out.sig          = FalconSignature::decode_from(r)?,
-                "idx"  => out.vc_index     = r.read_uint()?,
-                "prf"  => out.proof        = Proof::decode_from(r)?,
+                "sig" => out.sig = FalconSignature::decode_from(r)?,
+                "idx" => out.vc_index = r.read_uint()?,
+                "prf" => out.proof = Proof::decode_from(r)?,
                 "vkey" => out.verifying_key = FalconVerifier::decode_from(r)?,
-                _      => r.skip()?,
+                _ => r.skip()?,
             }
         }
         Ok(out)
@@ -231,7 +252,7 @@ impl MsgPackDecode for Reveal {
 /// [`signed_weight`]. Codec keys match the Algorand wire format exactly.
 #[derive(Clone, Debug)]
 pub struct StateProof {
-    pub sig_commit:               Digest,          // "c"
+    pub sig_commit:               Sumhash512Digest,          // "c"
     pub signed_weight:            u64,             // "w"
     pub sig_proofs:               Proof,           // "S"
     pub part_proofs:              Proof,           // "P"
@@ -243,7 +264,7 @@ pub struct StateProof {
 impl MsgPackDecode for StateProof {
     fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
-        let mut sig_commit              = [0u8; DIGEST_SIZE];
+        let mut sig_commit              = [0u8; SUMHASH512_DIGEST_SIZE];
         let mut signed_weight           = 0u64;
         let mut sig_proofs              = Proof::new(0, vec![]);
         let mut part_proofs             = Proof::new(0, vec![]);
@@ -254,7 +275,7 @@ impl MsgPackDecode for StateProof {
             match r.read_str()? {
                 "c"  => {
                     let b = r.read_bin()?;
-                    if b.len() != DIGEST_SIZE {
+                    if b.len() != SUMHASH512_DIGEST_SIZE {
                         return Err(DecodeError::InvalidDigestSize(b.len()));
                     }
                     sig_commit.copy_from_slice(b);

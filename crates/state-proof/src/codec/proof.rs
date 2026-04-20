@@ -4,7 +4,7 @@
 // Lives here because `state-proof` owns the traits; orphan rules forbid putting
 // these impls in `merkle` itself.
 
-use merkle::{Digest, HashFactory, HashType, Proof, DIGEST_SIZE};
+use merkle::{Sumhash512Digest, HashFactory, HashType, Proof, SUMHASH512_DIGEST_SIZE};
 
 use crate::codec::{AlgorandMessagePack, DecodeError, MsgPackDecode, MsgPackEncode, Reader};
 
@@ -53,7 +53,7 @@ impl MsgPackDecode for Proof {
     fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
         let mut tree_depth: u8 = 0;
-        let mut path: Vec<Digest> = Vec::new();
+        let mut path: Vec<Sumhash512Digest> = Vec::new();
         let mut hash_factory = HashFactory::sumhash512();
         for _ in 0..n {
             match r.read_str()? {
@@ -63,10 +63,10 @@ impl MsgPackDecode for Proof {
                     path = Vec::with_capacity(len);
                     for _ in 0..len {
                         let bytes = r.read_bin()?;
-                        if bytes.len() != DIGEST_SIZE {
+                        if bytes.len() != SUMHASH512_DIGEST_SIZE {
                             return Err(DecodeError::InvalidDigestSize(bytes.len()));
                         }
-                        let mut digest = [0u8; DIGEST_SIZE];
+                        let mut digest = [0u8; SUMHASH512_DIGEST_SIZE];
                         digest.copy_from_slice(bytes);
                         path.push(digest);
                     }
