@@ -10,4 +10,5 @@ pub use stateproof::{
     MerkleVerifier, MerkleSignature,
     SigSlotCommit, Participant, Reveal,
     StateProof,
+    VerifyError, verify_state_proof,
 };

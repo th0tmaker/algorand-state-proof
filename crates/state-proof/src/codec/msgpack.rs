@@ -103,12 +103,12 @@ enum Value {
 
 /// Canonical MessagePack map builder (Algorand-compatible).
 ///
-/// Keys are sorted lexicographically on [`encode`](AlgorandMessagePack::encode);
+/// Keys are sorted lexicographically on [encode](AlgorandMessagePack::encode);
 /// zero and empty fields are omitted automatically.
 #[allow(unused)]
 pub(crate) struct AlgorandMessagePack {
     /// Holds ordered key-value pairs for Algorand MessagePack encoding, where
-    /// the key is a string tag and the value is a variant of [`Value`].
+    /// the key is a string tag and the value is a variant of [Value].
     entries: Vec<(&'static str, Value)>,
 }
 
@@ -212,10 +212,10 @@ impl AlgorandMessagePack {
 /// Types that can be encoded as a canonical MessagePack map.
 #[allow(unused)]
 pub(crate) trait MsgPackEncode {
-    /// Converts into an intermediate [`AlgorandMessagePack`] type.
+    /// Converts into an intermediate [AlgorandMessagePack] type.
     fn to_msgpack(&self) -> AlgorandMessagePack;
 
-    /// Encodes directly into canonical [`AlgorandMessagePack`] bytes.
+    /// Encodes directly into canonical [AlgorandMessagePack] bytes.
     fn encode(&self) -> Vec<u8> { self.to_msgpack().encode() }
 }
 
@@ -397,11 +397,11 @@ impl<'a> Reader<'a> {
 /// Types that can be decoded from a canonical MessagePack byte slice.
 #[allow(unused)]
 pub(crate) trait MsgPackDecode: Sized {
-    /// Decodes one value from a shared [`Reader`] cursor; used when parsing a field
+    /// Decodes one value from a shared [Reader] cursor; used when parsing a field
     /// within a larger structure. Does not check for trailing bytes.
     fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError>;
 
-    /// Decodes `Self` from a complete byte slice. Returns [`DecodeError::TrailingBytes`]
+    /// Decodes `Self` from a complete byte slice. Returns [DecodeError::TrailingBytes]
     /// if any bytes remain unconsumed after the value, guarding against truncated reads.
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         let mut r = Reader::new(bytes);
