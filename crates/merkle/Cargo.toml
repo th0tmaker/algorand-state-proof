@@ -6,4 +6,5 @@ description = "Algorand Merkle tree and Vector Commitment tree with proof genera
 license = "MIT"
 
 [dependencies]
+sha2 = "0.11"
 sumhash = { path = "../sumhash" }

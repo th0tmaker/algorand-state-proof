@@ -3,4 +3,5 @@
 mod msgpack;
 pub mod proof;
 
-pub(crate) use msgpack::{AlgorandMessagePack, DecodeError, MsgPackDecode, MsgPackEncode, Reader};
+pub use msgpack::DecodeError;
+pub(crate) use msgpack::{AlgorandMessagePack, MsgPackDecode, MsgPackEncode, Reader};

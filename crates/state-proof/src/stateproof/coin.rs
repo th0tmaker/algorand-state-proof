@@ -1,18 +1,23 @@
 // crates/state-proof/src/stateproof/coin.rs
 
 use keccak::Shake256;
-use merkle::Sumhash512Digest;
+use merkle::{Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
+
+use super::MessageHash;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /// Domain separator used as a prefix to the coin choice seed before hashing.
-#[allow(unused)]
 const STATE_PROOF_COIN_DOMAIN: &[u8] = b"spc";
 
 /// Salt version byte included in the seed. Changing this produces different
 /// coins for different state proof verification algorithm versions.
-#[allow(unused)]
 pub const VERSION_FOR_COIN_GENERATOR: u8 = 0;
+
+/// Byte length of the serialized [CoinChoiceSeed].
+///
+/// Layout: `domain(3) || version(1) || partCommitment(64) || lnProvenWeight(8) || sigCommitment(64) || signedWeight(8) || messageHash(32)`
+pub(crate) const COIN_CHOICE_SEED_SIZE: usize = 3 + 1 + SUMHASH512_DIGEST_SIZE + 8 + SUMHASH512_DIGEST_SIZE + 8 + 32;
 
 // ── Ln approximation ─────────────────────────────────────────────────────────
 
@@ -21,9 +26,10 @@ pub const VERSION_FOR_COIN_GENERATOR: u8 = 0;
 ///
 /// Used to derive `ln_proven_weight` from `proven_weight` before constructing
 /// a [CoinChoiceSeed].
-#[allow(unused)]
 pub fn ln_int_approximation(x: u64) -> Option<u64> {
     if x == 0 { return None; }
+    // A `f64` has a 53-bit mantissa; inputs above 2^53 lose integer precision, which 
+    // is acceptable for typical Algorand stake weights (well below that threshold).
     let result = (x as f64).ln();
     Some((result * (1u64 << u16::BITS) as f64).ceil() as u64)
 }
@@ -35,11 +41,11 @@ pub fn ln_int_approximation(x: u64) -> Option<u64> {
 /// Serialized in a fixed binary layout (not msgpack) so that the encoding is
 /// compatible with Algorand's SNARK circuit prover.
 ///
+/// Layout:
 /// `"spc" || version(1) || partCommitment(64) || lnProvenWeight(8 LE) || sigCommitment(64) || signedWeight(8 LE) || messageHash(32)`
-#[allow(unused)]
 pub struct CoinChoiceSeed {
     /// The [Sumhash512Digest] root commitment of the participants tree.
-    pub part_commitment:  Sumhash512Digest,
+    pub part_commitment: Sumhash512Digest,
     /// `ceil(2^16 * ln(provenWeight))` — fixed-point ln approximation with 16 bits of precision.
     pub ln_proven_weight: u64,
     /// The [Sumhash512Digest] root commitment of the signatures tree.
@@ -47,34 +53,23 @@ pub struct CoinChoiceSeed {
     /// Total stake weight that signed the message.
     pub signed_weight: u64,
     /// SHA-256 hash of the message being attested to.
-    pub message_hash: [u8; 32],
+    pub message_hash: MessageHash,
 }
 
 impl CoinChoiceSeed {
     /// Serializes [CoinChoiceSeed] into a single flattened buffer of bytes with a specific fixed order.
-    #[allow(unused)]
-    fn to_bytes(&self) -> Vec<u8> {
-        // Pre-allocate the output buffer capacity 
-        let mut out = Vec::with_capacity(
-            STATE_PROOF_COIN_DOMAIN.len()
-            + 1
-            + self.part_commitment.len()
-            + 8
-            + self.sig_commitment.len()
-            + 8
-            + self.message_hash.len(),
-        );
+    fn to_bytes(&self) -> [u8; COIN_CHOICE_SEED_SIZE] {
+        let mut out = [0u8; COIN_CHOICE_SEED_SIZE];
+        let mut pos = 0;
 
-        // Append the bytes to the buffer in exact order.
-        out.extend_from_slice(STATE_PROOF_COIN_DOMAIN);
-        out.push(VERSION_FOR_COIN_GENERATOR);
-        out.extend_from_slice(&self.part_commitment);
-        out.extend_from_slice(&self.ln_proven_weight.to_le_bytes());
-        out.extend_from_slice(&self.sig_commitment);
-        out.extend_from_slice(&self.signed_weight.to_le_bytes());
-        out.extend_from_slice(&self.message_hash);
-        
-        // Return the output buffer.
+        out[pos..pos + 3].copy_from_slice(STATE_PROOF_COIN_DOMAIN); pos += 3;
+        out[pos] = VERSION_FOR_COIN_GENERATOR; pos += 1;
+        out[pos..pos + SUMHASH512_DIGEST_SIZE].copy_from_slice(&self.part_commitment); pos += SUMHASH512_DIGEST_SIZE;
+        out[pos..pos + 8].copy_from_slice(&self.ln_proven_weight.to_le_bytes()); pos += 8;
+        out[pos..pos + SUMHASH512_DIGEST_SIZE].copy_from_slice(&self.sig_commitment);  pos += SUMHASH512_DIGEST_SIZE;
+        out[pos..pos + 8].copy_from_slice(&self.signed_weight.to_le_bytes()); pos += 8;
+        out[pos..].copy_from_slice(&self.message_hash);
+
         out
     }
 }
@@ -88,7 +83,6 @@ impl CoinChoiceSeed {
 /// threshold = `floor(2^64 / signed_weight) * signed_weight`.
 /// A sample is accepted only when it falls below the threshold, then
 /// returned as `sample % signed_weight`.
-#[allow(unused)]
 #[derive(Debug)]
 pub struct CoinGenerator {
     /// The [Shake256] sponge construction extendable output function (XOF).
@@ -102,7 +96,6 @@ pub struct CoinGenerator {
 impl CoinGenerator {
     /// Creates a new instance of [CoinGenerator] from a [CoinChoiceSeed]
     /// by absorbing the serialized seed into [Shake256].
-    #[allow(unused)]
     pub fn new(seed: &CoinChoiceSeed) -> Self {
         // Create a new instance of `Shake256`, absord the seed bytes and flip to squeeze mode.
         let mut shake = Shake256::new();
@@ -112,7 +105,7 @@ impl CoinGenerator {
         // Get the seed total signed weight
         let signed_weight = seed.signed_weight;
 
-        /* Rejection sampling threshold: ensures uniform distribution over [0, signed_weight).
+        /* Rejection sampling threshold; ensures uniform distribution over [0, signed_weight).
         Naively taking a random `u64 % signed_weight` is biased — lower values appear
         slightly more often because 2^64 is rarely divisible by `signed_weight`. The
         leftover region (2^64 % signed_weight) maps to values [0, remainder) twice.
@@ -133,7 +126,6 @@ impl CoinGenerator {
     ///
     /// Squeezes 8 bytes from [Shake256], rejects if ≥ threshold (rejection sampling),
     /// and returns `sample % signed_weight`.
-    #[allow(unused)]
     pub fn next_coin(&mut self) -> u64 {
         loop {
             let mut buf = [0u8; 8];

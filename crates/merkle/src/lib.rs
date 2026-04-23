@@ -1,6 +1,67 @@
 // crates/merkle/src/lib.rs
 
+// NOTE: Merkle tree may need to fully support SHA256 as the hash algorithm for tree building
+// because Light Block Header Commitment (the commitment over block headers that state proofs attest to):
+// Uses SHA-256 to create the vector commitment whose leaves are the light block headers for the relevant rounds.
+
+// NOTE: Refactor Merkle Tree so that it can hash with any of the possible hash types (right now it only uses Sumhash512).
+
+/* NOTE:
+Process for obtaining the blockHeaderCommitment is:
+
+* For each of the 256 rounds in the interval, fetch the block and extract: seed (0), hash (1), genesis hash (gh), round (r), and SHA-256 transaction commitment (tc).
+* Construct a light block header struct for each round with those five fields.
+* Serialize each struct (the knowledge sources indicate msgpack keys for the fields, consistent with canonical msgpack encoding).
+* Order the 256 serialized blobs by round in ascending order — these are your elems.
+* Hash each element individually to produce 256 leaf hashes (with the appropriate domain-separation prefix "B256" per the vector commitment spec).
+* Build the vector commitment (Merkle) tree upward by iteratively hashing pairs of nodes using the MA domain-separation prefix,
+  with SHA-256 as the hash function throughout.
+* The root of this tree is the blockHeadersCommitment.
+
+What You Need to Verify a State Proof
+
+To verify a State Proof, you need three trusted inputs supplied by the verifier: [State Proof validity]
+
+    The message hash — the hash of the State Proof message being attested to.
+    A commitment to the participant array — the votersCommitment from the block header of an earlier block (specifically, from the block at the start of the relevant interval).
+    The trusted ProvenWeight — the minimum weight threshold that must have signed.
+
+Validity Checks
+
+A State Proof is valid if all of the following conditions pass: [State Proof validity]
+
+    The depth of the vector commitment for signatures and participant information is ≤ 20.
+    All FALCON signatures have the same salt version, matching the one specified in the State Proof.
+    The number of reveals is ≤ 640.
+    Using the trusted ProvenWeight, the State Proof passes the SNARK-Friendly Weight Threshold Verification check.
+    All revealed participant and signature information is validated by the vector commitment proofs — participants against the externally supplied participant commitment, and signatures against the commitment inside the State Proof itself.
+    All signatures are valid for the message hash.
+    For every i ∈ {0, …, NumReveals−1}, there is a reveal r_i where r_i ← T[PositionsToReveal[i]] and r_i.Sig.L ≤ coin_i < r_i.Sig.L + r_i.Part.Weight.
+
+Light Client Verification
+
+If you're building a Light Client (e.g., on another blockchain), you need to trust: [Using State Proofs]
+
+    The Algorand blockchain's ability to reach consensus on valid transactions.
+    The first participants commitment used to initialize the Light Client was obtained trustworthily.
+    The State Proof verifier code is implemented correctly.
+    Algorand's cryptographic primitives (Sumhash, Falcon) are secure.
+
+The key point is that the participant commitment is not inside the State Proof itself — it must be sourced externally (from the block header of the relevant earlier block, or from the previous State Proof message). [State Proof format]
+
+
+*/
+use std::collections::BTreeMap;
+
+use sha2::{Digest as Sha256Digest, Sha256};
+
 pub use sumhash::{Sumhash512, Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
+
+
+// ── Sha256 Constants ──────────────────────────────────────────────────────────
+
+/// Byte length of a SHA-256 digest (32 bytes = 256 bits = 8 × 32-bit words).
+pub const SHA256_DIGEST_SIZE: usize = 32;
 
 // ── Merkle constants ───────────────────────────────────────────────────────────
 
@@ -17,7 +78,60 @@ pub const MERKLE_MAX_ENCODED_TREE_DEPTH: u8 = 20;
 /// Byte length of the fixed-length [Proof] encoding: `1 (depth) + 20 × 64 (path slots)`.
 pub const PROOF_FIXED_REPR_SIZE: usize = 1 + MERKLE_MAX_ENCODED_TREE_DEPTH as usize * SUMHASH512_DIGEST_SIZE;
 
-// ── Hashable ──────────────────────────────────────────────────────────────────
+
+// ── HashType / HashFactory ────────────────────────────────────────────────────
+
+/// Numeric hash type identifiers consistent across Algorand's State Proof implementations.
+#[repr(u64)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HashType {
+    Sha512_256 = 0,
+    Sumhash512 = 1,
+    Sha256 = 2,
+    Sha512 = 3,
+}
+
+impl TryFrom<u64> for HashType {
+    type Error = u64;
+    fn try_from(v: u64) -> Result<Self, Self::Error> {
+        match v {
+            0 => Ok(Self::Sha512_256),
+            1 => Ok(Self::Sumhash512),
+            2 => Ok(Self::Sha256),
+            3 => Ok(Self::Sha512),
+            _ => Err(v),
+        }
+    }
+}
+
+/// Identifies which [HashType] was used to build the tree.
+///
+/// Codec key: `"hsh"`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HashFactory {
+    pub hash_type: HashType,
+}
+
+impl HashFactory {
+    /// Returns a [HashFactory] for [Sumhash512].
+    /// Used for: 
+    /// * Participant Commitment: `Sumhash512("spp" || W || KLT || StateProofPK)`.
+    /// * Signature Array Commitment: `Sumhash512("sps" || L || SerializedMerkleSignature)`.
+    /// * Merkle Signature Scheme: `Sumhash512("KP" || SchemeID || r || Pk_i)`.  
+    pub fn sumhash512() -> Self {
+        Self { hash_type: HashType::Sumhash512 }
+    }
+
+    /// Returns a [HashFactory] for Sha256:
+    /// Used for:
+    /// * Light Block Header Commitment: `SHA-256("B256" || msgpack(LightBlockHeader))`
+    pub fn sha256() -> Self {
+        Self { hash_type: HashType::Sha256 }
+    }
+}
+
+
+// ── Hash traits ──────────────────────────────────────────────────────────────────
 
 /// An object that can be cryptographically hashed into a tree leaf.
 /// The domain prefix prevents cross-type collisions.
@@ -27,39 +141,113 @@ pub trait Hashable {
     fn to_be_hashed(&self) -> (&'static [u8], Vec<u8>);
 }
 
-// ── Hash helpers ──────────────────────────────────────────────────────────────
+pub trait StreamingHasher {
+    /// Associated type for the individual hasher digest.
+    type Digest; 
 
-/// Finalises `h` into a fixed-size digest, consuming the current hash state.
-#[inline]
-fn finish(h: &mut Sumhash512) -> Sumhash512Digest {
-    let mut out = [0u8; SUMHASH512_DIGEST_SIZE];
-    h.finalize(&mut out);
-    out
+    // /// Resets the hasher to a fresh, zeroed state, making same instance reusable without full reconstruction.
+    // fn reset(&mut self);    
+    /// Feeds input `data` into the hasher.
+    fn update(&mut self, data: &[u8]);
+    /// Finalizes the hasher and returns the digest.
+    // fn finalize(&mut self) -> Self::Digest;
+    fn finalize(self) -> Self::Digest;
 }
+
+pub trait ResettableHasher: StreamingHasher {
+    /// Resets the hasher to a fresh, zeroed state immediately after finalizing the digest.
+    fn finalize_reset(&mut self) -> Self::Digest;  
+}
+
+impl StreamingHasher for Sha256 {
+    type Digest = [u8; SHA256_DIGEST_SIZE];
+
+    fn update(&mut self, data: &[u8]) {
+        Sha256Digest::update(self, data);
+    }
+
+    fn finalize(self) -> Self::Digest {
+        Sha256Digest::finalize(self).into()
+    }
+}
+
+
+impl StreamingHasher for Sumhash512 {
+    type Digest = Sumhash512Digest;
+
+    fn update(&mut self, data: &[u8]) {
+        Self::update(self, data);
+    }
+
+    fn finalize(self) -> Self::Digest {
+        let mut out = [0u8; SUMHASH512_DIGEST_SIZE];
+        let mut tmp = self;  // recover mutability
+
+        Self::finalize(&mut tmp, &mut out);
+
+        out
+    }
+}
+
+impl ResettableHasher for Sumhash512 {
+    fn finalize_reset(&mut self) -> Self::Digest {
+        let mut out = [0u8; SUMHASH512_DIGEST_SIZE];
+
+        self.finalize(&mut out);
+        self.reset();
+
+        out
+    }
+}
+
+
+// ── Hash helpers ──────────────────────────────────────────────────────────────
 
 /// Computes the hash of an internal node directly via `Hash("MA" || left || right)`.
 fn hash_internal_node(h: &mut Sumhash512, left: &Sumhash512Digest, right: &Sumhash512Digest) -> Sumhash512Digest {
-    h.reset();
     h.update(MERKLE_ARRAY_NODE);
     h.update(left);
     h.update(right);
-    finish(h)
+    h.finalize_reset()
 }
 
 /// Computes the padding digest for empty VC leaf positions: `Hash("MB")`.
 fn hash_vc_bottom_leaf(h: &mut Sumhash512) -> Sumhash512Digest {
-    h.reset();
     h.update(MERKLE_VC_BOTTOM_LEAF);
-    finish(h)
+    h.finalize_reset()
 }
 
-/// Computes `Hash(domain || data)` for `obj`, reusing `h` without rebuilding its lookup table.
-pub fn hash_obj(h: &mut Sumhash512, obj: &impl Hashable) -> Sumhash512Digest {
-    h.reset();
+// /// Computes `Hash(domain || data)` for `obj`, reusing `h` without rebuilding its lookup table.
+// pub fn hash_obj_reset(h: &mut Sumhash512, obj: &impl Hashable) -> Sumhash512Digest {
+//     let (domain, data) = obj.to_be_hashed();
+//     h.update(domain);
+//     h.update(&data);
+//     let out = finish(h);
+//     h.reset();
+//     out
+// }
+
+/// Computes `Hash(domain || data)` for `obj` and consumes the hasher instance.
+pub fn hash_obj_consume<H: StreamingHasher>(
+    mut h: H,
+    obj: &impl Hashable,
+) -> H::Digest {
     let (domain, data) = obj.to_be_hashed();
     h.update(domain);
     h.update(&data);
-    finish(h)
+    h.finalize()
+}
+
+/// Computes `Hash(domain || data)` for `obj`, reusing `h` without rebuilding its lookup table
+/// by reseting the hasher instance to a fresh, zeroed state.
+pub fn hash_obj_reset<H: ResettableHasher>(
+    h: &mut H,
+    obj: &impl Hashable,
+) -> H::Digest {
+    let (domain, data) = obj.to_be_hashed();
+    h.update(domain);
+    h.update(&data);
+    h.finalize_reset()
 }
 
 // ── Tree helpers ──────────────────────────────────────────────────────────────
@@ -80,17 +268,24 @@ fn build_levels(h: &mut Sumhash512, leaf_level: Vec<Sumhash512Digest>, pad: Sumh
     let mut levels = vec![leaf_level];
 
     // Build the tree bottom-up, one level at a time, until only the root remains.
-    while levels.last().unwrap().len() > 1 {
-        // Grab the current uppermost level.
-        let current = levels.last().unwrap();
+    while let Some(current_level) = levels.last() {
+        // Get the number of nodes at the current level
+        let total_nodes = current_level.len();
+
+        // Stop building the tree when the current level has only 1 node (root),
+        // `total_nodes == 0` should theoretically never happen, but still guard against it
+        // just in case by returning and stopping the building proccess.
+        if total_nodes <= 1 {
+            break;
+        }
 
         // Pre-allocate the parent level with the right number of slots.
-        let mut next = Vec::with_capacity(current.len().div_ceil(2));
+        let mut next = Vec::with_capacity(total_nodes.div_ceil(2));
 
         // Split into pairs representing (left, right) children of each parent node.
         // If the level has an odd number of nodes, the missing right child should be
         // padded with zeroes.
-        for chunk in current.chunks(2) {
+        for chunk in current_level.chunks(2) {
             let right = chunk.get(1).copied().unwrap_or(pad);
             // Hash the pair into one parent digest and push it onto the parent level.
             next.push(hash_internal_node(h, &chunk[0], &right));
@@ -104,12 +299,12 @@ fn build_levels(h: &mut Sumhash512, leaf_level: Vec<Sumhash512Digest>, pad: Sumh
 
 // ── Tree ──────────────────────────────────────────────────────────────────────
 
-/// A standard binary Merkle tree built over a slice of [Hashable] leaves.
+/// A membership binary Merkle tree built over a slice of [Hashable] leaves.
 ///
 /// `levels[0]` holds the leaf digests; `levels[last]` holds the single root digest.
 /// Odd-width levels are padded with a zero-digest right sibling.
 ///
-/// For Vector Commitment trees use [VcTree].
+/// For Vector Commitment index-based proving scheme use [VcTree].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Tree {
     /// The horizontal levels made up of nodes which build a hierarchical data structure.
@@ -126,7 +321,7 @@ impl Tree {
         let mut h = Sumhash512::new();
 
         // Hash each leaf into a 64-byte digest — this becomes `levels[0]` of the tree.
-        let leaf_level = leaves.iter().map(|l| hash_obj(&mut h, l)).collect();
+        let leaf_level = leaves.iter().map(|l| hash_obj_reset(&mut h, l)).collect();
 
         // Return the built levels wrapped inside the type.
         Self { levels: build_levels(&mut h, leaf_level, [0u8; SUMHASH512_DIGEST_SIZE]) }
@@ -178,9 +373,9 @@ impl Tree {
 /// A `VcTree` builds a standard `Tree` by adhering to Algorand's vector commitment specs where the leaves are placed at
 /// bit-reversed positions and padded to the next power of two `2^n` with `Hash("MB")` prefix, matching Algorand's VC spec.
 ///
-/// Distinct from [Tree] to prevent accidentally mixing standard Merkle [Tree::prove] with the VC variant,
-/// which uses a different proving algorithm. proofs from [VcTree::prove] must be
-/// verified with [Proof::verify_vc].
+/// Distinct from [Tree] to prevent accidentally mixing of membership Merkle trees, which use
+/// [Tree::prove] as the proving method, with the VC variant, which uses a different proving algorithm.
+/// Therefore, proofs obtained from [VcTree::prove] must be verified via [Proof::verify_vc] respectively.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VcTree {
     /// The underlying Merkle [Tree] with its full physical structure (including padded leaves).
@@ -213,7 +408,7 @@ impl VcTree {
         for (i, leaf) in leaves.iter().enumerate() {
             // the `vc_index` bit-reverses `i` so sequential external indices map
             // to well-separated internal positions, matching Algorand's VC spec.
-            leaf_level[vc_index(i, depth)] = hash_obj(&mut h, leaf);
+            leaf_level[vc_index(i, depth)] = hash_obj_reset(&mut h, leaf);
         }
 
         // Wrap the `Tree` and `leaf_count` into `VcTree` and return it.
@@ -259,61 +454,41 @@ impl VcTree {
     }
 }
 
-// ── HashType / HashFactory ────────────────────────────────────────────────────
-
-/// Numeric hash type identifiers consistent across Algorand's State Proof implementations.
-#[repr(u64)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HashType {
-    Sha512_256 = 0,
-    Sumhash512 = 1,
-    Sha256 = 2,
-    Sha512 = 3,
-}
-
-impl TryFrom<u64> for HashType {
-    type Error = u64;
-    fn try_from(v: u64) -> Result<Self, Self::Error> {
-        match v {
-            0 => Ok(Self::Sha512_256),
-            1 => Ok(Self::Sumhash512),
-            2 => Ok(Self::Sha256),
-            3 => Ok(Self::Sha512),
-            _ => Err(v),
-        }
-    }
-}
-
-/// Identifies which [HashType] was used to build the tree.
-///
-/// Codec key: `"hsh"`.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct HashFactory {
-    pub hash_type: HashType,
-}
-
-impl HashFactory {
-    /// Returns a [HashFactory] for [Sumhash512], the default for Algorand state proofs.
-    pub fn sumhash512() -> Self {
-        Self { hash_type: HashType::Sumhash512 }
-    }
-}
 
 // ── Proof ─────────────────────────────────────────────────────────────────────
 
-/// A Merkle inclusion proof: a sibling path from a leaf up to the root.
+/// A Merkle proof (authentication/inclusion path) for verifying a leaf in a hash tree.
 ///
-/// Produced by [Tree::prove] or [VcTree::prove]; verified with [Proof::verify]
-/// or [Proof::verify_vc] respectively.
+/// A `Proof` contains the data required to recompute a Merkle root from a leaf
+/// value and its sibling hashes. It can be used to prove:
+/// - membership in a Merkle tree
+/// - correctness of a value at a position in a [VcTree]
+/// depending on how the tree is interpreted.
+///
+/// Verification consists of iteratively hashing the leaf with each element
+/// in the path to reconstruct the root hash.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Proof {
+    /// The depth of the tree (number of levels from leaf to root).
+    ///
+    /// This should match the length of the authentication path.
     pub tree_depth: u8,
+
+    /// The authentication path from the leaf to the root.
+    ///
+    /// Each element is the hash of a sibling node required to recompute
+    /// the root. The order should be from the leaf level up to the root.
     pub path: Vec<Sumhash512Digest>,
+
+    /// The hash function used to compute node hashes in the tree.
+    ///
+    /// This must match the hash function used to construct the tree,
+    /// otherwise verification will fail.
     pub hash_factory: HashFactory,
 }
 
 impl Proof {
-    /// Verify proof with one delegated hasher instance.
+    /// Verify Merkle proof with a chosen [HashType].
     fn verify_with(&self, leaf: Sumhash512Digest, index: usize, root: &Sumhash512Digest, h: &mut Sumhash512) -> bool {
         let mut current = leaf;
         let mut idx = index;
@@ -374,13 +549,12 @@ impl Proof {
         out
     }
 
-    /// Verifies a batch of `items` that shares the same [Proof] path for a 
-    /// standard Merkle [Tree] for multiple `(internal_position, leaf_digest)` pairs.
-    ///
-    /// Path elements are consumed greedily in sorted-position order. For [VcTree] use
-    /// [verify_batch_vc](Self::verify_batch_vc), which handles bit-reversal automatically.
+    /// Verifies a batch of `items` that shares the same [Proof] path for a standard 
+    /// membership Merkle [Tree] for multiple `(internal_position, leaf_digest)` pairs.
+    /// Path elements are consumed greedily in sorted-position order.
+    /// 
+    /// For [VcTree] use [verify_batch_vc](Self::verify_batch_vc), which handles bit-reversal automatically.
     pub fn verify_batch(&self, items: &[(usize, Sumhash512Digest)], root: &Sumhash512Digest) -> bool {
-        use std::collections::BTreeMap;
 
         // A proof over zero leaves is valid only if no path elements were provided.
         if items.is_empty() {
@@ -429,11 +603,12 @@ impl Proof {
     }
 
     /// Verifies a batch of `items` that shares the same [Proof] path for a 
-    /// [VcTree].
+    /// [VcTree] respectively.
     ///
     /// Converts external sequential indices to bit-reversed internal positions,
     /// then delegates to [verify_batch](Self::verify_batch).
-    /// Use this for proofs received from [VcTree::prove].
+    /// 
+    /// Use this method specifically for verifying the proof in accordance with the vector commitment scheme.
     pub fn verify_batch_vc(&self, items: &[(usize, Sumhash512Digest)], root: &Sumhash512Digest) -> bool {
         let depth = self.tree_depth;
         let internal: Vec<(usize, Sumhash512Digest)> = items.iter()
@@ -457,13 +632,31 @@ mod tests {
         }
     }
 
-    /// The `hash_obj` helper must produce the same digest for the same input every time.
+    /// The `hash_obj_reset` helper must produce the same digest for the same input every time.
     #[test]
     fn hash_obj_is_deterministic() {
         let mut h = Sumhash512::new();
-        let a = hash_obj(&mut h, &TestLeaf(b"hello"));
-        let b = hash_obj(&mut h, &TestLeaf(b"hello"));
-        assert_eq!(a, b);
+
+        h.update(b"blabla");
+        h.update(b"tralala");
+
+        println!("hasher inital state: {:?}", h);
+        
+        let digest = h.clone().finalize();
+
+        h.reset();
+
+        // let a = hash_obj_reset(&mut h, &TestLeaf(b"hello"));
+        // let b = hash_obj_reset(&mut h, &TestLeaf(b"hello"));
+        // assert_eq!(a, b);
+        
+        println!("hasher digest: {:?}", digest);
+        println!("hasher after reset: {:?}", h);
+        
+        // let h2 = Sha256::new();
+
+        // let c = hash_obj_consume(h2, &TestLeaf(b"hello"));
+
     }
 
     /// Same data under different domain prefixes must produce different digests.
@@ -474,21 +667,21 @@ mod tests {
             fn to_be_hashed(&self) -> (&'static [u8], Vec<u8>) { (b"OT", self.0.to_vec()) }
         }
         let mut h = Sumhash512::new();
-        let a = hash_obj(&mut h, &TestLeaf(b"hello"));
-        let b = hash_obj(&mut h, &OtherLeaf(b"hello"));
+        let a = hash_obj_reset(&mut h, &TestLeaf(b"hello"));
+        let b = hash_obj_reset(&mut h, &OtherLeaf(b"hello"));
         assert_ne!(a, b);
     }
 
-    /// The `hash_obj` helper called twice in sequence must produce independent correct
+    /// The `hash_obj_reset` helper called twice in sequence must produce independent correct
     /// results, confirming the internal `reset()` fires between calls.
     #[test]
     fn hash_obj_reuses_hasher() {
         let mut h = Sumhash512::new();
-        let a = hash_obj(&mut h, &TestLeaf(b"first"));
-        let b = hash_obj(&mut h, &TestLeaf(b"second"));
+        let a = hash_obj_reset(&mut h, &TestLeaf(b"first"));
+        let b = hash_obj_reset(&mut h, &TestLeaf(b"second"));
         let mut h2 = Sumhash512::new();
-        let expected_a = hash_obj(&mut h2, &TestLeaf(b"first"));
-        let expected_b = hash_obj(&mut h2, &TestLeaf(b"second"));
+        let expected_a = hash_obj_reset(&mut h2, &TestLeaf(b"first"));
+        let expected_b = hash_obj_reset(&mut h2, &TestLeaf(b"second"));
         assert_eq!(a, expected_a);
         assert_eq!(b, expected_b);
     }
@@ -505,7 +698,7 @@ mod tests {
     fn single_leaf_tree_root_is_leaf_hash() {
         let leaf = TestLeaf(b"only");
         let mut h = Sumhash512::new();
-        let expected = hash_obj(&mut h, &leaf);
+        let expected = hash_obj_reset(&mut h, &leaf);
         let tree = Tree::build(&[leaf]);
         assert_eq!(tree.root(), Some(expected));
     }
@@ -528,7 +721,7 @@ mod tests {
         let mut h = Sumhash512::new();
         for (i, leaf) in leaves.iter().enumerate() {
             let proof = tree.prove(i).unwrap();
-            let leaf_digest = hash_obj(&mut h, leaf);
+            let leaf_digest = hash_obj_reset(&mut h, leaf);
             assert!(proof.verify(leaf_digest, i, &root), "proof failed for leaf {i}");
         }
     }
@@ -543,7 +736,7 @@ mod tests {
         let mut h = Sumhash512::new();
         for (i, leaf) in leaves.iter().enumerate() {
             let proof = tree.prove(i).unwrap();
-            let leaf_digest = hash_obj(&mut h, leaf);
+            let leaf_digest = hash_obj_reset(&mut h, leaf);
             assert!(proof.verify(leaf_digest, i, &root), "proof failed for leaf {i}");
         }
     }
@@ -564,7 +757,7 @@ mod tests {
         let wrong_root = [0xffu8; SUMHASH512_DIGEST_SIZE];
         let mut h = Sumhash512::new();
         let proof = tree.prove(0).unwrap();
-        let leaf_digest = hash_obj(&mut h, &leaves[0]);
+        let leaf_digest = hash_obj_reset(&mut h, &leaves[0]);
         assert!(!proof.verify(leaf_digest, 0, &wrong_root));
     }
 
@@ -577,7 +770,7 @@ mod tests {
         let mut h = Sumhash512::new();
         for (i, leaf) in leaves.iter().enumerate() {
             let proof = tree.prove(i).unwrap();
-            let leaf_digest = hash_obj(&mut h, leaf);
+            let leaf_digest = hash_obj_reset(&mut h, leaf);
             assert!(proof.verify_vc(leaf_digest, i, &root), "VC proof failed for leaf {i}");
         }
     }
@@ -592,7 +785,7 @@ mod tests {
         let mut h = Sumhash512::new();
         for (i, leaf) in leaves.iter().enumerate() {
             let proof = tree.prove(i).unwrap();
-            let leaf_digest = hash_obj(&mut h, leaf);
+            let leaf_digest = hash_obj_reset(&mut h, leaf);
             assert!(proof.verify_vc(leaf_digest, i, &root), "VC proof failed for leaf {i}");
         }
     }
@@ -605,7 +798,7 @@ mod tests {
         let wrong_root = [0xffu8; SUMHASH512_DIGEST_SIZE];
         let mut h = Sumhash512::new();
         let proof = tree.prove(0).unwrap();
-        let leaf_digest = hash_obj(&mut h, &leaves[0]);
+        let leaf_digest = hash_obj_reset(&mut h, &leaves[0]);
         assert!(!proof.verify_vc(leaf_digest, 0, &wrong_root));
     }
 
@@ -659,7 +852,7 @@ mod tests {
         let proof = Proof::new(tree.depth() as u8, vec![]);
         let items: Vec<(usize, Sumhash512Digest)> = leaves.iter()
             .enumerate()
-            .map(|(i, l)| (i, hash_obj(&mut h, l)))
+            .map(|(i, l)| (i, hash_obj_reset(&mut h, l)))
             .collect();
 
         assert!(proof.verify_batch(&items, &root));
@@ -684,8 +877,8 @@ mod tests {
         let batch_proof = Proof::new(tree.depth() as u8, batch_path);
 
         let items = vec![
-            (0, hash_obj(&mut h, &leaves[0])),
-            (2, hash_obj(&mut h, &leaves[2])),
+            (0, hash_obj_reset(&mut h, &leaves[0])),
+            (2, hash_obj_reset(&mut h, &leaves[2])),
         ];
 
         assert!(batch_proof.verify_batch(&items, &root));
@@ -704,7 +897,7 @@ mod tests {
         let proof = Proof::new(tree.depth() as u8, vec![]);
         let items: Vec<(usize, Sumhash512Digest)> = leaves.iter()
             .enumerate()
-            .map(|(i, l)| (i, hash_obj(&mut h, l)))
+            .map(|(i, l)| (i, hash_obj_reset(&mut h, l)))
             .collect();
 
         assert!(proof.verify_batch_vc(&items, &root));
@@ -730,8 +923,8 @@ mod tests {
         let batch_proof = Proof::new(tree.depth() as u8, batch_path);
 
         let items = vec![
-            (0, hash_obj(&mut h, &leaves[0])),
-            (1, hash_obj(&mut h, &leaves[1])),
+            (0, hash_obj_reset(&mut h, &leaves[0])),
+            (1, hash_obj_reset(&mut h, &leaves[1])),
         ];
 
         assert!(batch_proof.verify_batch_vc(&items, &root));

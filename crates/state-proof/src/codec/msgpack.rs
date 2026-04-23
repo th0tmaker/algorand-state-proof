@@ -101,9 +101,9 @@ enum Value {
 
 // ── AlgorandMessagePack ───────────────────────────────────────────────────────
 
-/// Canonical MessagePack map builder (Algorand-compatible).
+/// Canonical MessagePack map builder that is Algorand-compatible.
 ///
-/// Keys are sorted lexicographically on [encode](AlgorandMessagePack::encode);
+/// Keys are sorted lexicographically on [AlgorandMessagePack::encode];
 /// zero and empty fields are omitted automatically.
 #[allow(unused)]
 pub(crate) struct AlgorandMessagePack {
@@ -221,14 +221,25 @@ pub(crate) trait MsgPackEncode {
 
 // ── DecodeError ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, PartialEq)]
-#[allow(unused)]
-pub(crate) enum DecodeError {
+#[derive(Debug, Eq, PartialEq)]
+pub enum DecodeError {
+    /// The input ended before a complete value could be read.
     UnexpectedEof,
+    /// The format byte did not match the expected MessagePack type.
     UnexpectedType { expected: &'static str, got: u8 },
+    /// A `HashFactory` type tag did not correspond to a known [merkle::HashType].
     InvalidHashType(u64),
+    /// A binary blob had the wrong length for a [merkle::Sumhash512Digest].
     InvalidDigestSize(usize),
+    /// A binary blob had the wrong length for a Falcon-1024 public key.
+    InvalidPublicKeySize(usize),
+    /// A byte sequence of correct length could not be parsed as a Falcon-1024 public key.
+    InvalidPublicKey,
+    /// A byte sequence could not be parsed as a Falcon compressed signature.
+    InvalidSignature,
+    /// A MessagePack string field contained invalid UTF-8.
     InvalidUtf8,
+    /// Bytes remained unconsumed after successfully decoding a complete value.
     TrailingBytes,
 }
 
@@ -394,7 +405,7 @@ impl<'a> Reader<'a> {
 
 // ── MsgPackDecode ─────────────────────────────────────────────────────────────
 
-/// Types that can be decoded from a canonical MessagePack byte slice.
+/// Types that can be decoded from a canonical MessagePack binary form.
 #[allow(unused)]
 pub(crate) trait MsgPackDecode: Sized {
     /// Decodes one value from a shared [Reader] cursor; used when parsing a field

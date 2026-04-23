@@ -10,7 +10,7 @@ use keccak::{Shake256, Zeroize};
 #[allow(unused)]
 const SUMHASH512_BLOCK_SIZE: usize = 64;
 
-/// Byte length of a Sumhash512 digest (n × 8 = 8 × 64-bit words = 512 bits).
+/// Byte length of a Sumhash512 digest (64 bytes = 512 bits = 8 × 64-bit words).
 pub const SUMHASH512_DIGEST_SIZE: usize = 64;
 
 // ── Sumhash types ─────────────────────────────────────────────────────────────
@@ -349,7 +349,7 @@ impl Sumhash512 {
         Self(inner)
     }
 
-    /// Feeds `data` into the hasher, compressing any full blocks.
+    /// Feeds input `data` into the hasher, compressing any full blocks.
     pub fn update(&mut self, data: &[u8]) {
         self.0.update(data);
     }
@@ -359,7 +359,7 @@ impl Sumhash512 {
         self.0.reset();
     }
 
-    /// Finalises the hasher and writes the 64-byte digest into `out`.
+    /// Finalizes the hasher and writes the 64-byte digest into `out`.
     pub fn finalize(&mut self, out: &mut [u8; SUMHASH512_DIGEST_SIZE]) {
         self.0.finalize(out);
     }

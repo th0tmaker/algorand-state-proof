@@ -1,5 +1,8 @@
 // crates/state-proof/src/stateproof/mod.rs
 
+// NOTE: Build State Proof message support; struct + msgpack codec + hash_msg function
+// Maybe impl Hashable for StateProofMessage with `hash_obj()`
+
 mod coin;
 mod verifier;
 
@@ -7,31 +10,39 @@ mod verifier;
 pub use coin::{CoinChoiceSeed, CoinGenerator, ln_int_approximation};
 pub use verifier::{VerifyError, verify_state_proof};
 
-use algorand_falcon_keys::{CompressedSignature, PublicKey, FALCON_DET1024_PUBKEY_SIZE};
-use merkle::{Sumhash512Digest, SUMHASH512_DIGEST_SIZE, Proof};
+use algorand_falcon_keys::{
+    CompressedSignature, PublicKey,
+    FALCON_DET1024_PUBKEY_SIZE, FALCON_DET1024_SIG_COMPRESSED_HEADER, FALCON_DET1024_SIG_CT_SIZE,
+};
+use merkle::{Proof, Sumhash512Digest, PROOF_FIXED_REPR_SIZE, SHA256_DIGEST_SIZE, SUMHASH512_DIGEST_SIZE};
 
 use crate::codec::{DecodeError, MsgPackDecode, Reader};
 
-// ── FalconVerifier ────────────────────────────────────────────────────────────
+// ── Merkle Constants ──────────────────────────────────────────────────────────
 
-/// Wraps a deterministic `Falcon-1024` [PublicKey] used to verify a single round's ephemeral [CompressedSignature].
+/// Identifies the [MerkleSignatureScheme] suite of primitives used in the leaf hash preimages.
+/// Included for flexibility; a future suite would potentially use a different ID.
+pub(crate) const MERKLE_SIG_SCHEME_ID: u16 = 0;
+
+/// Byte length of the fixed-length binary representation of a [MerkleSignatureScheme].
 ///
-/// Codec key: `"k"`.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FalconVerifier {
-    /// Deterministic Falcon-1024 [PublicKey].
-    ///
-    /// Codec key: `"k"`.
-    pub public_key: PublicKey
-}
+/// Layout: `MerkleSigSchemeID(2) || sig_ct(1538) || pubkey(1793) || vc_index(8) || proof_fixed_repr`
+pub const MERKLE_SIG_SCHEME_FIXED_REPR_SIZE: usize =
+    2 + FALCON_DET1024_SIG_CT_SIZE + FALCON_DET1024_PUBKEY_SIZE + 8 + PROOF_FIXED_REPR_SIZE;
 
-impl Default for FalconVerifier {
-    fn default() -> Self {
-        Self { public_key: PublicKey::from_bytes(&[0u8; FALCON_DET1024_PUBKEY_SIZE]).unwrap() }
-    }
-}
+// ── Sha256 Constants ──────────────────────────────────────────────────────────
 
-impl MsgPackDecode for FalconVerifier {
+/// Byte length of a SHA-256 digest (32 bytes = 256 bits = 8 × 32-bit words).
+// pub const SHA256_DIGEST_SIZE: usize = 32;
+
+// ── Sha256 Types ──────────────────────────────────────────────────────────────
+
+/// A 32-byte SHA-256 hash digest representing the message being attested to by the state proof.
+pub type MessageHash = [u8; 32];
+
+// ── PublicKey ─────────────────────────────────────────────────────────────────
+
+impl MsgPackDecode for PublicKey {
     fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
         let mut bytes = [0u8; FALCON_DET1024_PUBKEY_SIZE];
@@ -40,49 +51,25 @@ impl MsgPackDecode for FalconVerifier {
                 "k" => {
                     let b = r.read_bin()?;
                     if b.len() != FALCON_DET1024_PUBKEY_SIZE {
-                        return Err(DecodeError::InvalidDigestSize(b.len()));
+                        return Err(DecodeError::InvalidPublicKeySize(b.len()));
                     }
                     bytes.copy_from_slice(b);
                 }
                 _ => r.skip()?,
             }
         }
-        let public_key = PublicKey::from_bytes(&bytes)
-            .map_err(|_| DecodeError::InvalidDigestSize(0))?;
-        Ok(Self { public_key })
+        PublicKey::from_bytes(&bytes)
+            .map_err(|_| DecodeError::InvalidPublicKey)
     }
 }
 
-// ── FalconSignature ───────────────────────────────────────────────────────────
+// ── CompressedSignature ───────────────────────────────────────────────────────
 
-/// Wraps a variable-length deterministic `Falcon-1024` [CompressedSignature].
-///
-/// Codec key: `"sig"`.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FalconSignature {
-    /// A Falcon-1024 [CompressedSignature].
-    ///
-    /// Codec key: `"sig"`.
-    pub sig: CompressedSignature,
-}
-
-impl Default for FalconSignature {
-    fn default() -> Self {
-        // Minimal valid compressed-signature shell: header byte + 1-byte salt version.
-        Self {
-            sig: CompressedSignature::from_bytes(
-                &[algorand_falcon_keys::FALCON_DET1024_SIG_COMPRESSED_HEADER, 0]).unwrap()
-        }
-    }
-}
-
-impl MsgPackDecode for FalconSignature {
+impl MsgPackDecode for CompressedSignature {
     fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
-        // Falcon signature is encoded as binary on the wire; raw blob of bytes 
         let b = r.read_bin()?;
         CompressedSignature::from_bytes(b)
-            .map(|sig| Self { sig })
-            .map_err(|_| DecodeError::InvalidDigestSize(b.len()))
+            .map_err(|_| DecodeError::InvalidSignature)
     }
 }
 
@@ -97,7 +84,7 @@ pub struct MerkleVerifier {
     ///
     /// Codec key: `"cmt"`.
     pub commitment: Sumhash512Digest,
-    /// Interval in rounds between ephemeral key rotations; a [FalconVerifier] at index `i`
+    /// Interval in rounds between ephemeral key rotations; a [PublicKey] at index `i`
     /// is valid for signing round `first_valid + i * key_lifetime`.
     ///
     /// Codec key: `"lf"`.
@@ -132,70 +119,77 @@ impl MsgPackDecode for MerkleVerifier {
     }
 }
 
-// ── MerkleSignature ───────────────────────────────────────────────────────────
+// ── MerkleSignatureScheme ───────────────────────────────────────────────────────────
 
-/// A single-round [FalconSignature] bundled with its Merkle membership [merkle::Proof],
+/// A single-round [CompressedSignature] bundled with its Merkle membership [merkle::Proof],
 /// proving that the signing key is committed to in the participant's long-term [merkle::VcTree].
 ///
 /// Codec keys: `"sig"`, `"idx"`, `"prf"`, `"vkey"`.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MerkleSignature {
-    /// The ephemeral [FalconSignature] over the attested message for this round.
+pub struct MerkleSignatureScheme {
+    /// The ephemeral [CompressedSignature] over the attested message for this round.
     ///
     /// Codec key: `"sig"`.
-    pub sig: FalconSignature,
+    pub sig: CompressedSignature,
     /// Leaf index in the [merkle::VcTree] identifying which ephemeral key was used to sign.
     ///
     /// Codec key: `"idx"`.
     pub vc_index: u64,
-    /// Merkle membership [merkle::Proof] authenticating `verifying_key` against the VC root.
+    /// Merkle membership [merkle::Proof] authenticating `verifying_key` against the VC tree `root`.
     ///
     /// Codec key: `"prf"`.
     pub proof: Proof,
-    /// Ephemeral [FalconVerifier] whose public key signed this round.
+    /// Ephemeral [PublicKey] used to verify this round's signature.
     ///
     /// Codec key: `"vkey"`.
-    pub verifying_key: FalconVerifier,
+    pub verifying_key: PublicKey,
 }
 
-impl Default for MerkleSignature {
+impl Default for MerkleSignatureScheme {
     fn default() -> Self {
         Self {
-            sig: FalconSignature::default(),
+            // Minimal valid compressed-signature shell: header byte + 1-byte salt version.
+            sig: CompressedSignature::from_bytes(
+                &[FALCON_DET1024_SIG_COMPRESSED_HEADER, 0]).unwrap(),
             vc_index: 0,
             proof: Proof::new(0, vec![]),
-            verifying_key: FalconVerifier::default(),
+            verifying_key: PublicKey::from_bytes(&[0u8; FALCON_DET1024_PUBKEY_SIZE]).unwrap(),
         }
     }
 }
 
-impl MerkleSignature {
+impl MerkleSignatureScheme {
     /// Serializes `self` into the SNARK-friendly fixed-length binary format used as
     /// leaf data in the state-proof signature tree.
-    ///
-    /// Format: `CryptoPrimitivesID(2 LE) || sig_ct(1538) || pubkey(1793) || vc_index(8 LE) || proof_fixed_repr`
-    pub(crate) fn fixed_len_repr(&self) -> Result<Vec<u8>, algorand_falcon_keys::Error> {
-        let ct = self.sig.sig.to_ct()?;
-        let mut out = Vec::new();
-        out.extend_from_slice(&0u16.to_le_bytes());
-        out.extend_from_slice(ct.as_bytes());
-        out.extend_from_slice(self.verifying_key.public_key.as_bytes());
-        out.extend_from_slice(&self.vc_index.to_le_bytes());
-        out.extend_from_slice(&self.proof.to_fixed_bytes());
+    pub(crate) fn to_fixed_bytes(&self) -> Result<[u8; MERKLE_SIG_SCHEME_FIXED_REPR_SIZE], algorand_falcon_keys::Error> {
+        let ct = self.sig.to_ct()?;
+        let mut out = [0u8; MERKLE_SIG_SCHEME_FIXED_REPR_SIZE];
+        let mut pos = 0;
+
+        out[pos..pos + 2].copy_from_slice(&MERKLE_SIG_SCHEME_ID.to_le_bytes()); pos += 2;
+        out[pos..pos + FALCON_DET1024_SIG_CT_SIZE].copy_from_slice(ct.as_bytes()); pos += FALCON_DET1024_SIG_CT_SIZE;
+        out[pos..pos + FALCON_DET1024_PUBKEY_SIZE].copy_from_slice(self.verifying_key.as_bytes()); pos += FALCON_DET1024_PUBKEY_SIZE;
+        out[pos..pos + 8].copy_from_slice(&self.vc_index.to_le_bytes()); pos += 8;
+        out[pos..].copy_from_slice(&self.proof.to_fixed_bytes());
+
         Ok(out)
+    }
+
+    pub(crate) fn salt_version(&self) -> u8 {
+        self.sig.salt_version()
     }
 }
 
-impl MsgPackDecode for MerkleSignature {
+impl MsgPackDecode for MerkleSignatureScheme {
     fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
-        let mut out = MerkleSignature::default();
+        let mut out = MerkleSignatureScheme::default();
         for _ in 0..n {
             match r.read_str()? {
-                "sig" => out.sig = FalconSignature::decode_from(r)?,
+                "sig" => out.sig = CompressedSignature::decode_from(r)?,
                 "idx" => out.vc_index = r.read_uint()?,
                 "prf" => out.proof = Proof::decode_from(r)?,
-                "vkey" => out.verifying_key = FalconVerifier::decode_from(r)?,
+                "vkey" => out.verifying_key = PublicKey::decode_from(r)?,
                 _ => r.skip()?,
             }
         }
@@ -211,10 +205,10 @@ impl MsgPackDecode for MerkleSignature {
 /// Codec keys: `"s"`, `"l"`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SigSlotCommit {
-    /// The participant's [MerkleSignature] over the attested message; authenticated via `sig_proofs`.
+    /// The participant's [MerkleSignatureScheme] over the attested message; authenticated via `sig_proofs`.
     ///
     /// Codec key: `"s"`.
-    pub sig: MerkleSignature,
+    pub mss: MerkleSignatureScheme,
     /// Cumulative stake weight of all slots below this one; defines this slot's coin range `[l, l + weight)`.
     ///
     /// Codec key: `"l"`.
@@ -227,7 +221,7 @@ impl MsgPackDecode for SigSlotCommit {
         let mut out = SigSlotCommit::default();
         for _ in 0..n {
             match r.read_str()? {
-                "s" => out.sig = MerkleSignature::decode_from(r)?,
+                "s" => out.mss = MerkleSignatureScheme::decode_from(r)?,
                 "l" => out.l = r.read_uint()?,
                 _ => r.skip()?,
             }
@@ -262,7 +256,7 @@ impl MsgPackDecode for Participant {
             match r.read_str()? {
                 "p" => out.pk = MerkleVerifier::decode_from(r)?,
                 "w" => out.weight = r.read_uint()?,
-                _   => r.skip()?,
+                _ => r.skip()?,
             }
         }
         Ok(out)
@@ -277,7 +271,7 @@ impl MsgPackDecode for Participant {
 /// Codec keys: `"s"`, `"p"`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Reveal {
-    /// The committed signature slot containing the [MerkleSignature] and cumulative weight.
+    /// The committed signature slot containing the [MerkleSignatureScheme] and cumulative weight.
     ///
     /// Codec key: `"s"`.
     pub sig_slot: SigSlotCommit,
@@ -310,12 +304,12 @@ impl MsgPackDecode for Reveal {
 /// `signed_weight`. Codec keys match the Algorand wire format exactly.
 ///
 /// Codec keys: `"c"`, `"w"`, `"S"`, `"P"`, `"v"`, `"r"`, `"pr"`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StateProof {
     /// [Sumhash512Digest] root commitment of the signature [merkle::VcTree].
     ///
     /// Codec key: `"c"`.
-    pub sig_commit: Sumhash512Digest,
+    pub sig_commitment: Sumhash512Digest,
     /// Total stake weight of all participants who signed.
     ///
     /// Codec key: `"w"`.
@@ -328,11 +322,11 @@ pub struct StateProof {
     ///
     /// Codec key: `"P"`.
     pub part_proofs: Proof,
-    /// Salt version used when hashing ephemeral keys; must match across all reveals.
+    /// The [MerkleSignatureScheme] salt version used when hashing ephemeral keys; must match across all reveals.
     ///
     /// Codec key: `"v"`.
-    pub merkle_sig_salt_version: u8,
-    /// Map from tree position to the corresponding [Reveal] data.
+    pub mss_salt_version: u8,
+    /// Ordered list of `(tree_position, Reveal)` pairs decoded from the wire map.
     ///
     /// Codec key: `"r"`.
     pub reveals: Vec<(u64, Reveal)>,
@@ -349,7 +343,7 @@ impl MsgPackDecode for StateProof {
         let mut signed_weight = 0u64;
         let mut sig_proofs = Proof::new(0, vec![]);
         let mut part_proofs = Proof::new(0, vec![]);
-        let mut merkle_sig_salt_version = 0u8;
+        let mut mss_salt_version = 0u8;
         let mut reveals = Vec::new();
         let mut positions_to_reveal = Vec::new();
         for _ in 0..n {
@@ -364,7 +358,7 @@ impl MsgPackDecode for StateProof {
                 "w" => signed_weight = r.read_uint()?,
                 "S" => sig_proofs = Proof::decode_from(r)?,
                 "P" => part_proofs = Proof::decode_from(r)?,
-                "v" => merkle_sig_salt_version = r.read_uint()? as u8,
+                "v" => mss_salt_version = r.read_uint()? as u8,
                 "r" => {
                     let len = r.read_map_len()?;
                     reveals = Vec::with_capacity(len);
@@ -385,13 +379,55 @@ impl MsgPackDecode for StateProof {
             }
         }
         Ok(Self {
-            sig_commit,
+            sig_commitment: sig_commit,
             signed_weight,
             sig_proofs,
             part_proofs,
-            merkle_sig_salt_version,
+            mss_salt_version,
             reveals,
             positions_to_reveal,
         })
     }
+}
+
+impl StateProof {
+    /// Decodes a [StateProof] from Algorand canonical MessagePack wire bytes.
+    pub fn from_msgpack(bytes: &[u8]) -> Result<Self, DecodeError> {
+        let mut r = Reader::new(bytes);
+        StateProof::decode_from(&mut r)
+    }
+}
+
+// ── StateProofMessage ─────────────────────────────────────────────────────────
+
+/// A post-quantum state proof attesting to the Algorand block state at a given round.
+///
+/// Received from the network and verified against a known `sig_commit` root and
+/// `signed_weight`. Codec keys match the Algorand wire format exactly.
+///
+/// Codec keys: `"b"`, `"f"`, `"l"`, `"P"`, `"v"`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StateProofMessage {
+    /// The [merkle::VcTree] `root` over all light block headers within the State Proof 
+    /// interval — i.e., the blocks from round first-attested-round to latest-attested-round.
+    ///
+    /// Codec key: `"b"`.
+    pub block_headers_commitment: [u8; SHA256_DIGEST_SIZE],
+    /// .
+    ///
+    /// Codec key: `"f"`.
+    pub first_attested_round: u64,
+    /// .
+    ///
+    /// Codec key: `"l"`.
+    pub latest_attested_round: u64,
+
+    /// .
+    ///
+    /// Codec key: `"P"`.
+    pub ln_proven_weight: u64,
+    /// .
+    ///
+    /// Codec key: `"v"`.
+    pub voters_commitment: Sumhash512Digest,
 }
