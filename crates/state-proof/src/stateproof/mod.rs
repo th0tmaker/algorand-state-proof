@@ -14,7 +14,7 @@ use algorand_falcon_keys::{
     CompressedSignature, PublicKey,
     FALCON_DET1024_PUBKEY_SIZE, FALCON_DET1024_SIG_COMPRESSED_HEADER, FALCON_DET1024_SIG_CT_SIZE,
 };
-use merkle::{Proof, Sumhash512Digest, PROOF_FIXED_REPR_SIZE, SHA256_DIGEST_SIZE, SUMHASH512_DIGEST_SIZE};
+use merkle::{Sumhash512, Proof, Sumhash512Digest, SHA256_DIGEST_SIZE, SUMHASH512_DIGEST_SIZE};
 
 use crate::codec::{DecodeError, MsgPackDecode, Reader};
 
@@ -24,11 +24,20 @@ use crate::codec::{DecodeError, MsgPackDecode, Reader};
 /// Included for flexibility; a future suite would potentially use a different ID.
 pub(crate) const MERKLE_SIG_SCHEME_ID: u16 = 0;
 
+/// Maximum tree depth accepted by the state proof verifier.
+/// Proofs with `tree_depth` exceeding this are rejected as invalid.
+pub const MERKLE_MAX_ENCODED_TREE_DEPTH: u8 = 20;
+
+/// Byte length of the fixed-length [Proof\<Sumhash512\>] binary encoding used in the state proof wire format.
+///
+/// Format: `tree_depth (1 B) || 20 × Sumhash512 digest slots (64 B each)`.
+pub const SUMHASH512_PROOF_FIXED_REPR_SIZE: usize = 1 + MERKLE_MAX_ENCODED_TREE_DEPTH as usize * SUMHASH512_DIGEST_SIZE;
+
 /// Byte length of the fixed-length binary representation of a [MerkleSignatureScheme].
 ///
 /// Layout: `MerkleSigSchemeID(2) || sig_ct(1538) || pubkey(1793) || vc_index(8) || proof_fixed_repr`
 pub const MERKLE_SIG_SCHEME_FIXED_REPR_SIZE: usize =
-    2 + FALCON_DET1024_SIG_CT_SIZE + FALCON_DET1024_PUBKEY_SIZE + 8 + PROOF_FIXED_REPR_SIZE;
+    2 + FALCON_DET1024_SIG_CT_SIZE + FALCON_DET1024_PUBKEY_SIZE + 8 + SUMHASH512_PROOF_FIXED_REPR_SIZE;
 
 // ── Sha256 Constants ──────────────────────────────────────────────────────────
 
@@ -37,7 +46,7 @@ pub const MERKLE_SIG_SCHEME_FIXED_REPR_SIZE: usize =
 
 // ── Sha256 Types ──────────────────────────────────────────────────────────────
 
-/// A 32-byte SHA-256 hash digest representing the message being attested to by the state proof.
+/// A 32-byte SHA-256 hash digest ed to by the state proof.
 pub type MessageHash = [u8; 32];
 
 // ── PublicKey ─────────────────────────────────────────────────────────────────
@@ -77,7 +86,7 @@ impl MsgPackDecode for CompressedSignature {
 
 /// Identifies a participant's long-term Merkle signing key.
 ///
-/// Codec keys: `"cmt"`, `"lf"`.
+/// Codec keys: `"cmt"representing the message being attest`, `"lf"`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MerkleVerifier {
     /// [Sumhash512Digest] root commitment of the participant's ephemeral [PublicKey] tree.
@@ -138,7 +147,7 @@ pub struct MerkleSignatureScheme {
     /// Merkle membership [merkle::Proof] authenticating `verifying_key` against the VC tree `root`.
     ///
     /// Codec key: `"prf"`.
-    pub proof: Proof,
+    pub proof: Proof<Sumhash512>,
     /// Ephemeral [PublicKey] used to verify this round's signature.
     ///
     /// Codec key: `"vkey"`.
@@ -152,7 +161,7 @@ impl Default for MerkleSignatureScheme {
             sig: CompressedSignature::from_bytes(
                 &[FALCON_DET1024_SIG_COMPRESSED_HEADER, 0]).unwrap(),
             vc_index: 0,
-            proof: Proof::new(0, vec![]),
+            proof: Proof::<Sumhash512>::new(0, vec![]),
             verifying_key: PublicKey::from_bytes(&[0u8; FALCON_DET1024_PUBKEY_SIZE]).unwrap(),
         }
     }
@@ -170,7 +179,14 @@ impl MerkleSignatureScheme {
         out[pos..pos + FALCON_DET1024_SIG_CT_SIZE].copy_from_slice(ct.as_bytes()); pos += FALCON_DET1024_SIG_CT_SIZE;
         out[pos..pos + FALCON_DET1024_PUBKEY_SIZE].copy_from_slice(self.verifying_key.as_bytes()); pos += FALCON_DET1024_PUBKEY_SIZE;
         out[pos..pos + 8].copy_from_slice(&self.vc_index.to_le_bytes()); pos += 8;
-        out[pos..].copy_from_slice(&self.proof.to_fixed_bytes());
+        // Proof fixed encoding: tree_depth (1 B) || zero-pad for unused slots || path entries
+        out[pos] = self.proof.tree_depth; pos += 1;
+        let pad = MERKLE_MAX_ENCODED_TREE_DEPTH.saturating_sub(self.proof.tree_depth) as usize;
+        let path_start = pos + pad * SUMHASH512_DIGEST_SIZE;
+        for (i, entry) in self.proof.path.iter().enumerate() {
+            let offset = path_start + i * SUMHASH512_DIGEST_SIZE;
+            out[offset..offset + SUMHASH512_DIGEST_SIZE].copy_from_slice(entry);
+        }
 
         Ok(out)
     }
@@ -317,11 +333,11 @@ pub struct StateProof {
     /// Batch [merkle::Proof] authenticating all revealed [SigSlotCommit] leaves against `sig_commit`.
     ///
     /// Codec key: `"S"`.
-    pub sig_proofs: Proof,
+    pub sig_proofs: Proof<Sumhash512>,
     /// Batch [merkle::Proof] authenticating all revealed [Participant] leaves against the trusted participant commitment.
     ///
     /// Codec key: `"P"`.
-    pub part_proofs: Proof,
+    pub part_proofs: Proof<Sumhash512>,
     /// The [MerkleSignatureScheme] salt version used when hashing ephemeral keys; must match across all reveals.
     ///
     /// Codec key: `"v"`.
@@ -341,8 +357,8 @@ impl MsgPackDecode for StateProof {
         let n = r.read_map_len()?;
         let mut sig_commit = [0u8; SUMHASH512_DIGEST_SIZE];
         let mut signed_weight = 0u64;
-        let mut sig_proofs = Proof::new(0, vec![]);
-        let mut part_proofs = Proof::new(0, vec![]);
+        let mut sig_proofs = Proof::<Sumhash512>::new(0, vec![]);
+        let mut part_proofs = Proof::<Sumhash512>::new(0, vec![]);
         let mut mss_salt_version = 0u8;
         let mut reveals = Vec::new();
         let mut positions_to_reveal = Vec::new();

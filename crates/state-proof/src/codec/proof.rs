@@ -4,7 +4,7 @@
 // Lives here because `state-proof` owns the traits; orphan rules forbid putting
 // these impls in `merkle` itself.
 
-use merkle::{Sumhash512Digest, HashFactory, HashType, Proof, SUMHASH512_DIGEST_SIZE};
+use merkle::{Sumhash512, Sumhash512Digest, HashFactory, HashType, Proof, SUMHASH512_DIGEST_SIZE};
 
 use crate::codec::{AlgorandMessagePack, DecodeError, MsgPackDecode, MsgPackEncode, Reader};
 
@@ -40,7 +40,7 @@ impl MsgPackDecode for HashFactory {
 
 // ── Proof ─────────────────────────────────────────────────────────────────────
 
-impl MsgPackEncode for Proof {
+impl MsgPackEncode for Proof<Sumhash512> {
     fn to_msgpack(&self) -> AlgorandMessagePack {
         AlgorandMessagePack::new()
             .map("hsh", self.hash_factory.to_msgpack())
@@ -49,7 +49,7 @@ impl MsgPackEncode for Proof {
     }
 }
 
-impl MsgPackDecode for Proof {
+impl MsgPackDecode for Proof<Sumhash512> {
     fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
         let mut tree_depth: u8 = 0;
@@ -128,7 +128,7 @@ mod tests {
             .map(|i| u8::from_str_radix(&GOLDEN[i..i + 2], 16).unwrap())
             .collect();
 
-        let proof = Proof::decode(&golden).unwrap();
+        let proof = Proof::<Sumhash512>::decode(&golden).unwrap();
 
         assert_eq!(proof.tree_depth, 5);
         assert_eq!(proof.hash_factory, HashFactory::sumhash512());

@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 
 use algorand_falcon_keys::{PublicKey, FALCON_DET1024_PUBKEY_SIZE};
-use merkle::{hash_obj_reset, Hashable, Sumhash512, Sumhash512Digest, SUMHASH512_DIGEST_SIZE, MERKLE_MAX_ENCODED_TREE_DEPTH};
+use merkle::{hash_obj, Hashable, Sumhash512, Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
+
+use super::MERKLE_MAX_ENCODED_TREE_DEPTH;
 
 use super::{
     CoinChoiceSeed, CoinGenerator, MERKLE_SIG_SCHEME_ID, MessageHash, MerkleSignatureScheme, Participant,
@@ -107,7 +109,7 @@ impl Hashable for SigSlotData<'_> {
 
 /// Returns the leaf digest of `p` for batch VC proof verification against `part_commitment`.
 fn hash_participant_leaf(h: &mut Sumhash512, p: &Participant) -> Sumhash512Digest {
-    hash_obj_reset(h, &ParticipantLeaf(p))
+    hash_obj(h, &ParticipantLeaf(p))
 }
 
 /// Builds the `l(8) || sig_fixed_repr` preimage for `slot` and returns its Sumhash512 leaf digest
@@ -121,7 +123,7 @@ fn hash_sig_slot_leaf(h: &mut Sumhash512, pos: u64, slot: &SigSlotCommit) -> Res
     data.extend_from_slice(&slot.l.to_le_bytes());
     data.extend_from_slice(&sig_repr);
 
-    Ok(hash_obj_reset(h, &SigSlotData(&data)))
+    Ok(hash_obj(h, &SigSlotData(&data)))
 }
 
 // ── Round alignment ───────────────────────────────────────────────────────────
@@ -154,7 +156,7 @@ fn verify_merkle_sig(
     let valid_round = first_round_in_key_lifetime(round, key_lifetime);
 
     // Reconstruct the expected VC leaf hash for the ephemeral key at its committed round.
-    let leaf = hash_obj_reset(h, &CommittablePK { verifying_key: &mss.verifying_key, round: valid_round });
+    let leaf = hash_obj(h, &CommittablePK { verifying_key: &mss.verifying_key, round: valid_round });
 
     // Verify the key is committed at `vc_index` in the participant's key tree.
     // Safe: vc_index is bounded by `key_lifetime`, a small protocol value well within usize.
