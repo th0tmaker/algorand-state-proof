@@ -1,50 +1,74 @@
 // crates/state-proof/tests/verify_state_proof.rs
 //
-// Known-answer test against a real Algorand mainnet state proof (round 60483072).
+// Known-answer test against a real Algorand mainnet state proof.
 //
-// Parameters extracted from:
-//   GET https://mainnet-api.algonode.cloud/v2/stateproofs/60483072  (JSON)
-//   GET https://mainnet-api.algonode.cloud/v2/blocks/60483072        (block header)
+// State proof transaction:
+//   ID:    U3E4UQIKQF7X2KJWNXAK7F7S6736TOLST5I7MKEGLESK5ZJLSTOQ
+//   Round: 60000133
+//   Covers rounds: 59999745 – 60000000  (sprnd = 60000000)
 //
-// msg_hash = SHA-512/256("spm" || canonical_msgpack(StateProofMessage))
-// part_commitment = StateProofMessage.VotersCommitment (= block spt[0].v)
-// ln_proven_weight = StateProofMessage.LnProvenWeight
-// strength_target  = 256 (Algorand mainnet StateProofStrengthTarget)
+// Previous state proof transaction (supplies the trusted params for this proof):
+//   ID:    WH6WHFQIFYZTKTOUTMNZUZV4ENEVWGYFBYVQ2AHENUZ3F4Z4P64Q
+//   Round: 59999877
+//
+// Trusted parameters (from previous state proof message):
+//   part_commitment  = base64-decode(PREV_SP_VOTERS_COMMITMENT)
+//   ln_proven_weight = PREV_SP_LN_PROVEN_WEIGHT
+//
+// msg_hash = SHA-512/256("spm" || canonical_msgpack(current message))
+// strength_target = 256  (Algorand mainnet StateProofStrengthTarget)
 
-use algorand_state_proof::{DecodeError, StateProof, verify_state_proof};
+use algorand_state_proof::{StateProof, verify_state_proof};
 
-const ROUND: u64 = 60483072;
-const LN_PROVEN_WEIGHT: u64 = 2231004;
-const STRENGTH_TARGET: u64 = 256;
+// ── Current state proof ───────────────────────────────────────────────────────
 
-/// Trusted root of the participants Merkle tree (`StateProofMessage.VotersCommitment`).
+const SP_TXN_ID:   &str = "U3E4UQIKQF7X2KJWNXAK7F7S6736TOLST5I7MKEGLESK5ZJLSTOQ";
+const SP_TXN_RND:  u64  = 60000133;
+const SP_LATEST_RND: u64 = 60000000;
+const SP_FIRST_RND:  u64 = 59999745;
+
+// ── Previous state proof (trusted bootstrapping data) ─────────────────────────
+
+const PREV_SP_TXN_ID:   &str = "WH6WHFQIFYZTKTOUTMNZUZV4ENEVWGYFBYVQ2AHENUZ3F4Z4P64Q";
+const PREV_SP_TXN_RND:  u64  = 59999877;
+const PREV_SP_LN_PROVEN_WEIGHT: u64 = 2230322;
+const PREV_SP_VOTERS_COMMITMENT: &str =
+    "Yqhs72l9VsNRRfXTDe5ZRmRnsTYP9fm0rp5kywwt8y9Ul39tNa1abC7ceX3+Hy3XnxZogVGzYRZsBMJCvpwTWQ==";
+
+// ── Verification parameters ───────────────────────────────────────────────────
+
+const ROUND:            u64 = SP_LATEST_RND;
+const LN_PROVEN_WEIGHT: u64 = PREV_SP_LN_PROVEN_WEIGHT;
+const STRENGTH_TARGET:  u64 = 256;
+
+/// Trusted participant commitment = base64-decode(`PREV_SP_VOTERS_COMMITMENT`).
 const PART_COMMITMENT: [u8; 64] = [
-    0x59, 0xeb, 0xf2, 0x56, 0x31, 0x3e, 0xe4, 0x6f,
-    0x84, 0x16, 0x8d, 0x7d, 0xa3, 0x4f, 0xcc, 0xa8,
-    0x37, 0xfb, 0xfb, 0x2a, 0x74, 0xbe, 0x3a, 0xdf,
-    0xd7, 0x9d, 0x85, 0xac, 0x6c, 0x89, 0x45, 0x2c,
-    0xa6, 0x04, 0xcc, 0x74, 0x9b, 0xa3, 0x4b, 0x98,
-    0xfc, 0xa9, 0xd4, 0x13, 0x76, 0x41, 0x4f, 0x5b,
-    0x67, 0x89, 0x03, 0x51, 0xeb, 0xdb, 0x4b, 0x78,
-    0xca, 0xac, 0x0c, 0xe8, 0x54, 0x99, 0x90, 0x7d,
+    0x62, 0xa8, 0x6c, 0xef, 0x69, 0x7d, 0x56, 0xc3,
+    0x51, 0x45, 0xf5, 0xd3, 0x0d, 0xee, 0x59, 0x46,
+    0x64, 0x67, 0xb1, 0x36, 0x0f, 0xf5, 0xf9, 0xb4,
+    0xae, 0x9e, 0x64, 0xcb, 0x0c, 0x2d, 0xf3, 0x2f,
+    0x54, 0x97, 0x7f, 0x6d, 0x35, 0xad, 0x5a, 0x6c,
+    0x2e, 0xdc, 0x79, 0x7d, 0xfe, 0x1f, 0x2d, 0xd7,
+    0x9f, 0x16, 0x68, 0x81, 0x51, 0xb3, 0x61, 0x16,
+    0x6c, 0x04, 0xc2, 0x42, 0xbe, 0x9c, 0x13, 0x59,
 ];
 
-/// SHA-512/256("spm" || canonical_msgpack(StateProofMessage)).
+/// SHA-512/256("spm" || canonical_msgpack(StateProofMessage for round 60000000)).
 const MSG_HASH: [u8; 32] = [
-    0x13, 0xfb, 0x94, 0x62, 0xd5, 0x0f, 0xb3, 0xdf,
-    0xaa, 0x9a, 0x8d, 0xe5, 0xbb, 0xb3, 0x40, 0x4b,
-    0x7d, 0xb0, 0x19, 0x67, 0x08, 0x8d, 0xce, 0xf4,
-    0x06, 0x9c, 0x38, 0xd8, 0xc9, 0x48, 0x85, 0x70,
+    0xee, 0xbf, 0xd2, 0x83, 0xc7, 0xae, 0x4f, 0xf5,
+    0x60, 0x83, 0x9c, 0x2f, 0xa2, 0xe6, 0xf6, 0x24,
+    0x5f, 0xb1, 0xdc, 0xd9, 0x0a, 0x19, 0xcf, 0x2f,
+    0x73, 0x5d, 0x5c, 0xf8, 0x83, 0x48, 0x90, 0x21,
 ];
 
-static FIXTURE: &[u8] = include_bytes!("fixtures/stateproof_60483072.bin");
+static FIXTURE: &[u8] = include_bytes!("fixtures/stateproof_60000000.bin");
 
 #[test]
 fn decode_mainnet_state_proof() {
     let sp = StateProof::from_msgpack(FIXTURE).expect("decode failed");
-    assert_eq!(sp.signed_weight, 2008053432038055);
+    assert_eq!(sp.signed_weight, 1984993817111541);
     assert_eq!(sp.positions_to_reveal.len(), 149);
-    assert_eq!(sp.reveals.len(), 65);
+    assert_eq!(sp.reveals.len(), 67);
 }
 
 #[test]

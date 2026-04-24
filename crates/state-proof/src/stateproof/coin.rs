@@ -14,10 +14,14 @@ const STATE_PROOF_COIN_DOMAIN: &[u8] = b"spc";
 /// coins for different state proof verification algorithm versions.
 pub const VERSION_FOR_COIN_GENERATOR: u8 = 0;
 
-/// Byte length of the serialized [CoinChoiceSeed].
+/// Byte length of the serialized `CoinChoiceSeed`.
 ///
 /// Layout: `domain(3) || version(1) || partCommitment(64) || lnProvenWeight(8) || sigCommitment(64) || signedWeight(8) || messageHash(32)`
 pub(crate) const COIN_CHOICE_SEED_SIZE: usize = 3 + 1 + SUMHASH512_DIGEST_SIZE + 8 + SUMHASH512_DIGEST_SIZE + 8 + 32;
+
+/// `ceil(2^16 · ln 2)` — the fixed-point representation of ln(2) in this scheme,
+/// equal to `ln_int_approximation(2)`. Used in the state proof strength inequality.
+pub(crate) const LN2_FIXED_POINT: u64 = 45427;
 
 // ── Ln approximation ─────────────────────────────────────────────────────────
 
@@ -25,7 +29,7 @@ pub(crate) const COIN_CHOICE_SEED_SIZE: usize = 3 + 1 + SUMHASH512_DIGEST_SIZE +
 /// or `None` if `x` is zero.
 ///
 /// Used to derive `ln_proven_weight` from `proven_weight` before constructing
-/// a [CoinChoiceSeed].
+/// a `CoinChoiceSeed`.
 pub fn ln_int_approximation(x: u64) -> Option<u64> {
     if x == 0 { return None; }
     // A `f64` has a 53-bit mantissa; inputs above 2^53 lose integer precision, which 
@@ -44,11 +48,11 @@ pub fn ln_int_approximation(x: u64) -> Option<u64> {
 /// Layout:
 /// `"spc" || version(1) || partCommitment(64) || lnProvenWeight(8 LE) || sigCommitment(64) || signedWeight(8 LE) || messageHash(32)`
 pub struct CoinChoiceSeed {
-    /// The [Sumhash512Digest] root commitment of the participants tree.
+    /// The `Sumhash512Digest` root commitment of the participants tree.
     pub part_commitment: Sumhash512Digest,
     /// `ceil(2^16 * ln(provenWeight))` — fixed-point ln approximation with 16 bits of precision.
     pub ln_proven_weight: u64,
-    /// The [Sumhash512Digest] root commitment of the signatures tree.
+    /// The `Sumhash512Digest` root commitment of the signatures tree.
     pub sig_commitment: Sumhash512Digest,
     /// Total stake weight that signed the message.
     pub signed_weight: u64,
@@ -57,7 +61,7 @@ pub struct CoinChoiceSeed {
 }
 
 impl CoinChoiceSeed {
-    /// Serializes [CoinChoiceSeed] into a single flattened buffer of bytes with a specific fixed order.
+    /// Serializes `CoinChoiceSeed` into a single flattened buffer of bytes with a specific fixed order.
     fn to_bytes(&self) -> [u8; COIN_CHOICE_SEED_SIZE] {
         let mut out = [0u8; COIN_CHOICE_SEED_SIZE];
         let mut pos = 0;
@@ -77,7 +81,7 @@ impl CoinChoiceSeed {
 // ── CoinGenerator ─────────────────────────────────────────────────────────────
 
 /// Produces a stream of pseudorandom coin values in `[0, signed_weight)` by
-/// squeezing 64-bit chunks from a [Shake256] context seeded with [CoinChoiceSeed].
+/// squeezing 64-bit chunks from a `Shake256` context seeded with `CoinChoiceSeed`.
 ///
 /// Uses rejection sampling to ensure a uniform distribution:
 /// threshold = `floor(2^64 / signed_weight) * signed_weight`.
@@ -85,7 +89,7 @@ impl CoinChoiceSeed {
 /// returned as `sample % signed_weight`.
 #[derive(Debug)]
 pub struct CoinGenerator {
-    /// The [Shake256] sponge construction extendable output function (XOF).
+    /// The `Shake256` sponge construction extendable output function (XOF).
     shake: Shake256,
     /// Total stake weight of signers only.
     signed_weight: u64,
@@ -94,8 +98,8 @@ pub struct CoinGenerator {
 }
 
 impl CoinGenerator {
-    /// Creates a new instance of [CoinGenerator] from a [CoinChoiceSeed]
-    /// by absorbing the serialized seed into [Shake256].
+    /// Creates a new instance of `CoinGenerator` from a `CoinChoiceSeed`
+    /// by absorbing the serialized seed into `Shake256`.
     pub fn new(seed: &CoinChoiceSeed) -> Self {
         // Create a new instance of `Shake256`, absord the seed bytes and flip to squeeze mode.
         let mut shake = Shake256::new();
@@ -124,7 +128,7 @@ impl CoinGenerator {
 
     /// Returns the next coin value uniformly distributed in `[0, signed_weight)`.
     ///
-    /// Squeezes 8 bytes from [Shake256], rejects if ≥ threshold (rejection sampling),
+    /// Squeezes 8 bytes from `Shake256`, rejects if ≥ threshold (rejection sampling),
     /// and returns `sample % signed_weight`.
     pub fn next_coin(&mut self) -> u64 {
         loop {
@@ -168,7 +172,7 @@ mod tests {
     /// ln(2) with 16 bits of precision = ceil(2^16 * ln(2)) = 45427.
     #[test]
     fn ln_approx_of_two_matches_go_constant() {
-        assert_eq!(ln_int_approximation(2), Some(45427));
+        assert_eq!(ln_int_approximation(2), Some(LN2_FIXED_POINT));
     }
 
     /// Two generators built from identical seeds must produce the same coin sequence.
@@ -190,7 +194,10 @@ mod tests {
     #[test]
     fn different_seeds_produce_different_coins() {
         let seed_a = make_test_seed(1_000_000);
-        let seed_b = CoinChoiceSeed { sig_commitment: [9u8; 64], ..make_test_seed(1_000_000) };
+        let seed_b = CoinChoiceSeed {
+             sig_commitment: [9u8; 64],
+            ..make_test_seed(1_000_000)
+        };
 
         let coins_a: Vec<u64> = {
             let mut g = CoinGenerator::new(&seed_a);

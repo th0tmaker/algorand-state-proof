@@ -8,14 +8,9 @@ use merkle::{hash_obj, Hashable, Sumhash512, Sumhash512Digest, SUMHASH512_DIGEST
 use super::MERKLE_MAX_ENCODED_TREE_DEPTH;
 
 use super::{
-    CoinChoiceSeed, CoinGenerator, MERKLE_SIG_SCHEME_ID, MessageHash, MerkleSignatureScheme, Participant,
-    Reveal, SigSlotCommit, StateProof, ln_int_approximation,
+    CoinChoiceSeed, CoinGenerator, LN2_FIXED_POINT, MERKLE_SIG_SCHEME_ID, MessageHash,
+    MerkleSignatureScheme, Participant, Reveal, SigSlotCommit, StateProof, ln_int_approximation,
 };
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-/// `ceil(2^16 · ln 2)` — fixed-point ln(2) used in the security-strength inequality.
-const LN2_FIXED_POINT: u64 = 45427;
 
 // ── VerifyError ───────────────────────────────────────────────────────────────
 
@@ -75,7 +70,7 @@ impl Hashable for ParticipantLeaf<'_> {
 /// * Outer tree (root = `part_commitment`): one [ParticipantLeaf] per participant,
 ///   containing the participant's weight and the root of their inner key tree.
 /// * Inner tree (root = `participant.pk.commitment`): one [CommittablePK] per key
-///   rotation window, containing the ephemeral [PublicKey] valid for that window.
+///   rotation window, containing the ephemeral `PublicKey` valid for that window.
 ///
 /// `round` is the start of the current lifetime window (`first_round_in_key_lifetime`),
 /// not the exact round being proven — the same key covers the whole window.
@@ -140,7 +135,7 @@ fn first_round_in_key_lifetime(round: u64, key_lifetime: u64) -> u64 {
 
 // ── Per-reveal verification ───────────────────────────────────────────────────
 
-/// Verifies a single [MerkleSignatureScheme] in two steps:
+/// Verifies a single `MerkleSignatureScheme` in two steps:
 /// 1. VC proof — proves the ephemeral key is committed at `mss.vc_index` in the participant's key tree.
 /// 2. Falcon — proves the ephemeral key signed `msg_hash` for this round.
 fn verify_merkle_sig(
@@ -172,7 +167,7 @@ fn verify_merkle_sig(
 
 // ── Public verifier ───────────────────────────────────────────────────────────
 
-/// Verifies a [StateProof] against trusted parameters.
+/// Verifies a `StateProof` against trusted parameters.
 ///
 /// ### Parameters
 /// * `state_proof` — decoded from network wire bytes.
@@ -239,9 +234,9 @@ pub fn verify_state_proof(
     // A single Sumhash512 context is shared across all calls; `hash_obj`
     // resets the hasher internally so each call is independent.
     let mut h = Sumhash512::new();
-    let mut sig_items: Vec<(usize, Sumhash512Digest)> =
+    let mut sig_elems: Vec<(usize, Sumhash512Digest)> =
         Vec::with_capacity(state_proof.reveals.len());
-    let mut part_items: Vec<(usize, Sumhash512Digest)> =
+    let mut part_elems: Vec<(usize, Sumhash512Digest)> =
         Vec::with_capacity(state_proof.reveals.len());
 
     for &(pos, ref reveal) in &state_proof.reveals {
@@ -256,17 +251,17 @@ pub fn verify_state_proof(
         )?;
 
         // Safe: tree positions are bounded by tree depth ≤ 20 (< 2^20), well within usize on all platforms.
-        sig_items.push((pos as usize, hash_sig_slot_leaf(&mut h, pos, &reveal.sig_slot)?));
-        part_items.push((pos as usize, hash_participant_leaf(&mut h, &reveal.participant)));
+        sig_elems.push((pos as usize, hash_sig_slot_leaf(&mut h, pos, &reveal.sig_slot)?));
+        part_elems.push((pos as usize, hash_participant_leaf(&mut h, &reveal.participant)));
     }
 
     // ── 6. Batch VC proof for the signature commitment ────────────────────────
-    if !state_proof.sig_proofs.verify_batch_vc(&sig_items, &state_proof.sig_commitment) {
+    if !state_proof.sig_proofs.verify_batch_vc(&sig_elems, &state_proof.sig_commitment) {
         return Err(VerifyError::SigProofFailed);
     }
 
     // ── 7. Batch VC proof for the participant commitment ──────────────────────
-    if !state_proof.part_proofs.verify_batch_vc(&part_items, part_commitment) {
+    if !state_proof.part_proofs.verify_batch_vc(&part_elems, part_commitment) {
         return Err(VerifyError::PartProofFailed);
     }
 

@@ -1,5 +1,8 @@
 // crates/state-proof/src/codec/msgpack.rs
 
+use super::Error;
+
+
 // ── Format constants ──────────────────────────────────────────────────────────
 // Named constants are used by the write helpers only; the Reader matches raw
 // literals directly, where inline comments serve the same documentation purpose.
@@ -19,6 +22,7 @@
 #[allow(unused)] const UINT16: u8 = 0xcd;
 #[allow(unused)] const UINT32: u8 = 0xce;
 #[allow(unused)] const UINT64: u8 = 0xcf;
+
 
 // ── Write helpers ─────────────────────────────────────────────────────────────
 
@@ -99,6 +103,7 @@ enum Value {
     Map(AlgorandMessagePack),
 }
 
+
 // ── AlgorandMessagePack ───────────────────────────────────────────────────────
 
 /// Canonical MessagePack map builder that is Algorand-compatible.
@@ -108,7 +113,7 @@ enum Value {
 #[allow(unused)]
 pub(crate) struct AlgorandMessagePack {
     /// Holds ordered key-value pairs for Algorand MessagePack encoding, where
-    /// the key is a string tag and the value is a variant of [Value].
+    /// the key is a string tag and the value is a variant of `Value`.
     entries: Vec<(&'static str, Value)>,
 }
 
@@ -135,20 +140,20 @@ impl AlgorandMessagePack {
         self
     }
 
-    /// Appends an array-of-binaries field; omitted if `items` is empty.
-    pub(crate) fn bytes_array(mut self, key: &'static str, items: &[impl AsRef<[u8]>]) -> Self {
-        if !items.is_empty() {
-            let raw: Vec<Vec<u8>> = items.iter().map(|i| i.as_ref().to_vec()).collect();
+    /// Appends an array-of-binaries field; omitted if `elems` is empty.
+    pub(crate) fn bytes_array(mut self, key: &'static str, elems: &[impl AsRef<[u8]>]) -> Self {
+        if !elems.is_empty() {
+            let raw: Vec<Vec<u8>> = elems.iter().map(|i| i.as_ref().to_vec()).collect();
             self.entries.push((key, Value::BinArray(raw)));
         }
         self
     }
 
-    /// Appends an array-of-u64 field; omitted if `items` is empty.
+    /// Appends an array-of-u64 field; omitted if `elems` is empty.
     #[allow(unused)]
-    pub(crate) fn uint_array(mut self, key: &'static str, items: &[u64]) -> Self {
-        if !items.is_empty() {
-            self.entries.push((key, Value::UintArray(items.to_vec())));
+    pub(crate) fn uint_array(mut self, key: &'static str, elems: &[u64]) -> Self {
+        if !elems.is_empty() {
+            self.entries.push((key, Value::UintArray(elems.to_vec())));
         }
         self
     }
@@ -180,13 +185,13 @@ impl AlgorandMessagePack {
             match value {
                 Value::Uint(v) => write_uint(out, v),
                 Value::Bin(b) => write_bin(out, &b),
-                Value::BinArray(items) => {
-                    write_array_header(out, items.len());
-                    for item in items { write_bin(out, &item); }
+                Value::BinArray(elems) => {
+                    write_array_header(out, elems.len());
+                    for item in elems { write_bin(out, &item); }
                 }
-                Value::UintArray(items) => {
-                    write_array_header(out, items.len());
-                    for v in items { write_uint(out, v); }
+                Value::UintArray(elems) => {
+                    write_array_header(out, elems.len());
+                    for v in elems { write_uint(out, v); }
                 }
                 Value::UintKeyedMap(mut entries) => {
                     // Integer-keyed maps sort numerically per Algorand canonical ordering.
@@ -207,41 +212,19 @@ impl AlgorandMessagePack {
     }
 }
 
+
 // ── MsgPackEncode ─────────────────────────────────────────────────────────────
 
 /// Types that can be encoded as a canonical MessagePack map.
 #[allow(unused)]
 pub(crate) trait MsgPackEncode {
-    /// Converts into an intermediate [AlgorandMessagePack] type.
+    /// Converts into an intermediate `AlgorandMessagePack` type.
     fn to_msgpack(&self) -> AlgorandMessagePack;
 
-    /// Encodes directly into canonical [AlgorandMessagePack] bytes.
+    /// Encodes directly into canonical `AlgorandMessagePack` bytes.
     fn encode(&self) -> Vec<u8> { self.to_msgpack().encode() }
 }
 
-// ── DecodeError ───────────────────────────────────────────────────────────────
-
-#[derive(Debug, Eq, PartialEq)]
-pub enum DecodeError {
-    /// The input ended before a complete value could be read.
-    UnexpectedEof,
-    /// The format byte did not match the expected MessagePack type.
-    UnexpectedType { expected: &'static str, got: u8 },
-    /// A `HashFactory` type tag did not correspond to a known [merkle::HashType].
-    InvalidHashType(u64),
-    /// A binary blob had the wrong length for a [merkle::Sumhash512Digest].
-    InvalidDigestSize(usize),
-    /// A binary blob had the wrong length for a Falcon-1024 public key.
-    InvalidPublicKeySize(usize),
-    /// A byte sequence of correct length could not be parsed as a Falcon-1024 public key.
-    InvalidPublicKey,
-    /// A byte sequence could not be parsed as a Falcon compressed signature.
-    InvalidSignature,
-    /// A MessagePack string field contained invalid UTF-8.
-    InvalidUtf8,
-    /// Bytes remained unconsumed after successfully decoding a complete value.
-    TrailingBytes,
-}
 
 // ── Reader ────────────────────────────────────────────────────────────────────
 
@@ -264,76 +247,76 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads a single byte and advances the cursor.
-    fn read_byte(&mut self) -> Result<u8, DecodeError> {
-        if self.pos >= self.data.len() { return Err(DecodeError::UnexpectedEof); }
+    fn read_byte(&mut self) -> Result<u8, Error> {
+        if self.pos >= self.data.len() { return Err(Error::UnexpectedEof); }
         let b = self.data[self.pos];
         self.pos += 1;
         Ok(b)
     }
 
     /// Reads `n` bytes as a slice and advances the cursor.
-    fn read_bytes(&mut self, n: usize) -> Result<&'a [u8], DecodeError> {
-        if self.pos + n > self.data.len() { return Err(DecodeError::UnexpectedEof); }
+    fn read_bytes(&mut self, n: usize) -> Result<&'a [u8], Error> {
+        if self.pos + n > self.data.len() { return Err(Error::UnexpectedEof); }
         let slice = &self.data[self.pos..self.pos + n];
         self.pos += n;
         Ok(slice)
     }
 
     /// Reads a big-endian `u16` value.
-    fn read_u16(&mut self) -> Result<u16, DecodeError> {
+    fn read_u16(&mut self) -> Result<u16, Error> {
         let b = self.read_bytes(2)?;
         Ok(u16::from_be_bytes([b[0], b[1]]))
     }
 
     /// Reads a big-endian `u32` value.
-    fn read_u32(&mut self) -> Result<u32, DecodeError> {
+    fn read_u32(&mut self) -> Result<u32, Error> {
         let b = self.read_bytes(4)?;
         Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
     }
 
     /// Reads a big-endian `u64` value.
-    fn read_u64(&mut self) -> Result<u64, DecodeError> {
+    fn read_u64(&mut self) -> Result<u64, Error> {
         let b = self.read_bytes(8)?;
         Ok(u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
     }
 
     /// Reads a `MessagePack` map header and returns the number of key-value pairs.
-    pub(crate) fn read_map_len(&mut self) -> Result<usize, DecodeError> {
+    pub(crate) fn read_map_len(&mut self) -> Result<usize, Error> {
         let b = self.read_byte()?;
         match b {
             0x80..=0x8f => Ok((b & 0x0f) as usize),
             0xde => Ok(self.read_u16()? as usize),
             0xdf => Ok(self.read_u32()? as usize),
-            _ => Err(DecodeError::UnexpectedType { expected: "map", got: b }),
+            _ => Err(Error::UnexpectedType { expected: "map", got: b }),
         }
     }
 
     /// Reads a `MessagePack` array header and returns the number of elements.
-    pub(crate) fn read_array_len(&mut self) -> Result<usize, DecodeError> {
+    pub(crate) fn read_array_len(&mut self) -> Result<usize, Error> {
         let b = self.read_byte()?;
         match b {
             0x90..=0x9f => Ok((b & 0x0f) as usize),
             0xdc => Ok(self.read_u16()? as usize),
             0xdd => Ok(self.read_u32()? as usize),
-            _ => Err(DecodeError::UnexpectedType { expected: "array", got: b }),
+            _ => Err(Error::UnexpectedType { expected: "array", got: b }),
         }
     }
 
     /// Reads a `MessagePack` string and returns it as a UTF-8 `&str`.
-    pub(crate) fn read_str(&mut self) -> Result<&'a str, DecodeError> {
+    pub(crate) fn read_str(&mut self) -> Result<&'a str, Error> {
         let b = self.read_byte()?;
         let len = match b {
             0xa0..=0xbf => (b & 0x1f) as usize,
             0xd9 => self.read_byte()? as usize,
             0xda => self.read_u16()? as usize,
             0xdb => self.read_u32()? as usize,
-            _ => return Err(DecodeError::UnexpectedType { expected: "str", got: b }),
+            _ => return Err(Error::UnexpectedType { expected: "str", got: b }),
         };
-        std::str::from_utf8(self.read_bytes(len)?).map_err(|_| DecodeError::InvalidUtf8)
+        std::str::from_utf8(self.read_bytes(len)?).map_err(|_| Error::InvalidUtf8)
     }
 
     /// Reads a `MessagePack` unsigned integer and returns it as `u64`.
-    pub(crate) fn read_uint(&mut self) -> Result<u64, DecodeError> {
+    pub(crate) fn read_uint(&mut self) -> Result<u64, Error> {
         let b = self.read_byte()?;
         match b {
             0x00..=0x7f => Ok(b as u64),
@@ -341,18 +324,18 @@ impl<'a> Reader<'a> {
             0xcd => Ok(self.read_u16()? as u64),
             0xce => Ok(self.read_u32()? as u64),
             0xcf => self.read_u64(),
-            _ => Err(DecodeError::UnexpectedType { expected: "uint", got: b }),
+            _ => Err(Error::UnexpectedType { expected: "uint", got: b }),
         }
     }
 
     /// Reads a `MessagePack` binary value and returns it as a byte slice.
-    pub(crate) fn read_bin(&mut self) -> Result<&'a [u8], DecodeError> {
+    pub(crate) fn read_bin(&mut self) -> Result<&'a [u8], Error> {
         let b = self.read_byte()?;
         let len = match b {
             0xc4 => self.read_byte()? as usize,
             0xc5 => self.read_u16()? as usize,
             0xc6 => self.read_u32()? as usize,
-            _ => return Err(DecodeError::UnexpectedType { expected: "bin", got: b }),
+            _ => return Err(Error::UnexpectedType { expected: "bin", got: b }),
         };
         self.read_bytes(len)
     }
@@ -360,7 +343,7 @@ impl<'a> Reader<'a> {
     /// Skips one complete `MessagePack` value. Handles all MsgPack types,
     /// including nested maps and arrays by recursing once per contained 
     /// element. Used to step past unknown keys during map decoding.
-    pub(crate) fn skip(&mut self) -> Result<(), DecodeError> {
+    pub(crate) fn skip(&mut self) -> Result<(), Error> {
         let b = self.read_byte()?;
         match b {
             0x00..=0x7f => Ok(()),  // positive fixint
@@ -398,26 +381,27 @@ impl<'a> Reader<'a> {
             0xde => { let n = self.read_u16()? as usize; for _ in 0..n * 2 { self.skip()?; } Ok(()) } // map16
             0xdf => { let n = self.read_u32()? as usize; for _ in 0..n * 2 { self.skip()?; } Ok(()) } // map32
             0xe0..=0xff => Ok(()),  // negative fixint
-            _ => Err(DecodeError::UnexpectedType { expected: "any", got: b }),  // 0xc1: never used per spec
+            _ => Err(Error::UnexpectedType { expected: "any", got: b }),  // 0xc1: never used per spec
         }
     }
 }
+
 
 // ── MsgPackDecode ─────────────────────────────────────────────────────────────
 
 /// Types that can be decoded from a canonical MessagePack binary form.
 #[allow(unused)]
 pub(crate) trait MsgPackDecode: Sized {
-    /// Decodes one value from a shared [Reader] cursor; used when parsing a field
+    /// Decodes one value from a shared `Reader` cursor; used when parsing a field
     /// within a larger structure. Does not check for trailing bytes.
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError>;
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error>;
 
-    /// Decodes `Self` from a complete byte slice. Returns [DecodeError::TrailingBytes]
+    /// Decodes `Self` from a complete byte slice. Returns [Error::TrailingBytes]
     /// if any bytes remain unconsumed after the value, guarding against truncated reads.
-    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+    fn decode(bytes: &[u8]) -> Result<Self, Error> {
         let mut r = Reader::new(bytes);
         let val = Self::decode_from(&mut r)?;
-        if r.remaining() > 0 { return Err(DecodeError::TrailingBytes); }
+        if r.remaining() > 0 { return Err(Error::TrailingBytes); }
         Ok(val)
     }
 }
@@ -540,8 +524,8 @@ mod tests {
     /// A bytes_array field encodes as a fixarray of bin8 entries.
     #[test]
     fn bytes_array_encoding() {
-        let items: &[&[u8]] = &[&[0x01], &[0x02, 0x03]];
-        let out = AlgorandMessagePack::new().bytes_array("p", items).encode();
+        let elems: &[&[u8]] = &[&[0x01], &[0x02, 0x03]];
+        let out = AlgorandMessagePack::new().bytes_array("p", elems).encode();
         assert_eq!(out, vec![
             0x81,               // fixmap(1)
             0xa1, b'p',         // fixstr "p"
@@ -650,14 +634,14 @@ mod tests {
     #[test]
     fn reader_eof_error() {
         let mut r = Reader::new(&[]);
-        assert_eq!(r.read_map_len(), Err(DecodeError::UnexpectedEof));
+        assert_eq!(r.read_map_len(), Err(Error::UnexpectedEof));
     }
 
     /// Reading a uint tag where a map is expected must return UnexpectedType.
     #[test]
     fn reader_wrong_type_error() {
         let mut r = Reader::new(&[0x01]); // fixint, not a map
-        assert!(matches!(r.read_map_len(), Err(DecodeError::UnexpectedType { .. })));
+        assert!(matches!(r.read_map_len(), Err(Error::UnexpectedType { .. })));
     }
 
     /// Trailing bytes after a valid value must return TrailingBytes.
@@ -665,13 +649,13 @@ mod tests {
     fn from_msgpack_trailing_bytes_error() {
         struct Dummy;
         impl MsgPackDecode for Dummy {
-            fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+            fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
                 r.read_map_len()?;
                 Ok(Dummy)
             }
         }
         let bytes = vec![0x80, 0xff]; // empty map + stray byte
-        assert!(matches!(Dummy::decode(&bytes), Err(DecodeError::TrailingBytes)));
+        assert!(matches!(Dummy::decode(&bytes), Err(Error::TrailingBytes)));
     }
 
     // ── Round-trips ───────────────────────────────────────────────────────────
@@ -686,7 +670,7 @@ mod tests {
             }
         }
         impl MsgPackDecode for Wrapper {
-            fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+            fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
                 let n = r.read_map_len()?;
                 let mut v = 0u64;
                 for _ in 0..n {
@@ -715,7 +699,7 @@ mod tests {
             }
         }
         impl MsgPackDecode for Wrapper {
-            fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+            fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
                 let n = r.read_map_len()?;
                 let mut d = vec![];
                 for _ in 0..n {

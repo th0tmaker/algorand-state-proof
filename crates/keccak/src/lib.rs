@@ -8,12 +8,12 @@ use core::fmt;
 
 // ── Shake256 internals ────────────────────────────────────────────────────────
 
-/// Number of u64 lanes in the Keccak-f[1600] state (1600 bits / 64 = 25).
+/// Number of u64 lanes in the Keccak-f\[1600\] state (1600 bits / 64 = 25).
 const SHAKE256_STATE_WORDS: usize = 25;
 /// Bytes absorbed or squeezed per permutation call (1600 − 2×256 = 1088 bits = 136 bytes).
 const SHAKE256_RATE: usize = 136;
 
-// ── Keccak-f[1600] internals ──────────────────────────────────────────────────
+// ── Keccak-f\[1600\] internals ──────────────────────────────────────────────────
 //
 /// The `RHO` table. Fixed per-lane bit-rotation offsets used in the ρ step. Defined by the
 /// Keccak spec to maximise diffusion and break symmetry across all 24 rounds.
@@ -39,7 +39,7 @@ const RC: [u64; 24] = [
     0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
 ];
 
-/// Applies the Keccak-f[1600] permutation to `state` in-place.
+/// Applies the Keccak-f\[1600\] permutation to `state` in-place.
 ///
 /// Runs 24 rounds of the five-step sequence θ, ρ, π, χ, ι over a 25-word/lane
 /// (1600-bit) state. This is the core primitive underlying SHAKE256 and SHA-3.
@@ -100,12 +100,12 @@ pub (crate) fn keccak_f(state: &mut [u64; SHAKE256_STATE_WORDS]) {
 
 /// SHAKE256 sponge state for streaming absorb and arbitrary-length squeeze.
 ///
-/// Wraps a 1600-bit Keccak-f[1600] permutation state with a rate-sized input
+/// Wraps a 1600-bit Keccak-f\[1600\] permutation state with a rate-sized input
 /// buffer. Input is absorbed in 136-byte blocks; after `flip()`, output
 /// bytes are squeezed from the same state one block at a time.
 #[derive(Clone, Eq, PartialEq)]
 pub struct Shake256 {
-    /// The 1600-bit (200-byte) Keccak-f[1600] permutation state, stored as 25 × u64 words/lanes.
+    /// The 1600-bit (200-byte) Keccak-f\[1600\] permutation state, stored as 25 × u64 words/lanes.
     state: [u64; SHAKE256_STATE_WORDS],
     /// Input buffer accumulating bytes until a full 136-byte block is ready.
     buf: [u8; SHAKE256_RATE],
@@ -146,7 +146,7 @@ impl Shake256 {
     }
 
     /// XORs `self.buf` into the first 17 words/lanes of the state as little-endian
-    /// `u64`s, then applies the Keccak-f[1600] permutation in-place.
+    /// `u64`s, then applies the Keccak-f\[1600\] permutation in-place.
     fn process_block(&mut self) {
         // XOR the 136-byte buffer into the first 17 words of the state
         // (136 / 8 = 17), interpreting each 8-byte chunk as a little-endian u64.
@@ -155,7 +155,7 @@ impl Shake256 {
             self.state[i] ^= word;
         }
 
-        // Apply the Keccak-f[1600] permutation in-place
+        // Apply the Keccak-f\[1600\] permutation in-place
         keccak_f(&mut self.state);
     }
 
@@ -224,7 +224,7 @@ impl Shake256 {
     /// Squeezes `out.len()` bytes from the sponge state into `out`.
     ///
     /// Reads bytes from the state in little-endian lane order, applying another
-    /// Keccak-f[1600] permutation each time a 136-byte output block is exhausted.
+    /// Keccak-f\[1600\] permutation each time a 136-byte output block is exhausted.
     ///
     /// # Panics
     /// Panics if called before `flip()` — squeezing an unfinalized sponge reads
@@ -514,7 +514,7 @@ mod tests {
         );
     }
 
-    /// Canonical all-zero Keccak-f[1600] state: 25 lanes of 0.
+    /// Canonical all-zero Keccak-f\[1600\] state: 25 lanes of 0.
     /// This is the simplest possible input and gives a fully deterministic,
     /// well-known output that exercises all 24 rounds and all five steps
     /// (θ, ρ, π, χ, ι) without any absorb/padding logic involved.
@@ -523,7 +523,7 @@ mod tests {
         // Initalize all-zero state
         let mut state = [0u64; SHAKE256_STATE_WORDS];
 
-        // Apply exactly one Keccak-f[1600] permutation in-place.
+        // Apply exactly one Keccak-f\[1600\] permutation in-place.
         keccak_f(&mut state);
 
         // Expected output: the 25 state lanes after one permutation of the

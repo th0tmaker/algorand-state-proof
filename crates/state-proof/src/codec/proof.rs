@@ -1,20 +1,18 @@
 // crates/state-proof/src/codec/proof.rs
-//
-// MsgPackEncode / MsgPackDecode impls for types defined in the `merkle` crate.
-// Lives here because `state-proof` owns the traits; orphan rules forbid putting
-// these impls in `merkle` itself.
+
 
 use merkle::{Sumhash512, Sumhash512Digest, HashFactory, HashType, Proof, SUMHASH512_DIGEST_SIZE};
 
-use crate::codec::{AlgorandMessagePack, DecodeError, MsgPackDecode, MsgPackEncode, Reader};
+use crate::codec::{AlgorandMessagePack, Error, MsgPackDecode, MsgPackEncode, Reader};
 
 // ── HashType ──────────────────────────────────────────────────────────────────
 
 impl MsgPackDecode for HashType {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
-        HashType::try_from(r.read_uint()?).map_err(DecodeError::InvalidHashType)
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
+        HashType::try_from(r.read_uint()?).map_err(Error::InvalidHashType)
     }
 }
+
 
 // ── HashFactory ───────────────────────────────────────────────────────────────
 
@@ -25,7 +23,7 @@ impl MsgPackEncode for HashFactory {
 }
 
 impl MsgPackDecode for HashFactory {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
         let n = r.read_map_len()?;
         let mut hash_type = HashType::Sha512_256;
         for _ in 0..n {
@@ -37,6 +35,7 @@ impl MsgPackDecode for HashFactory {
         Ok(Self { hash_type })
     }
 }
+
 
 // ── Proof ─────────────────────────────────────────────────────────────────────
 
@@ -50,7 +49,7 @@ impl MsgPackEncode for Proof<Sumhash512> {
 }
 
 impl MsgPackDecode for Proof<Sumhash512> {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
         let n = r.read_map_len()?;
         let mut tree_depth: u8 = 0;
         let mut path: Vec<Sumhash512Digest> = Vec::new();
@@ -64,7 +63,7 @@ impl MsgPackDecode for Proof<Sumhash512> {
                     for _ in 0..len {
                         let bytes = r.read_bin()?;
                         if bytes.len() != SUMHASH512_DIGEST_SIZE {
-                            return Err(DecodeError::InvalidDigestSize(bytes.len()));
+                            return Err(Error::InvalidDigestSize { expected: SUMHASH512_DIGEST_SIZE, got: bytes.len() });
                         }
                         let mut digest = [0u8; SUMHASH512_DIGEST_SIZE];
                         digest.copy_from_slice(bytes);
@@ -75,9 +74,16 @@ impl MsgPackDecode for Proof<Sumhash512> {
                 _     => r.skip()?,
             }
         }
+        if hash_factory.hash_type != HashType::Sumhash512 {
+            return Err(Error::HashTypeMismatch {
+                expected: HashType::Sumhash512,
+                got: hash_factory.hash_type,
+            });
+        }
         Ok(Self { tree_depth, path, hash_factory })
     }
 }
+
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -134,5 +140,24 @@ mod tests {
         assert_eq!(proof.hash_factory, HashFactory::sumhash512());
         assert_eq!(proof.path.len(), 12);
         assert_eq!(proof.encode(), golden);
+    }
+
+    /// Decoding a Proof<Sumhash512> whose wire HashFactory says Sha256 must return
+    /// HashTypeMismatch, not silently produce a mismatched proof.
+    #[test]
+    fn wrong_hash_type_is_rejected() {
+        // Encode a minimal proof (depth=1, empty path) with hash_type = Sha256 (2).
+        let wire = AlgorandMessagePack::new()
+            .map("hsh", AlgorandMessagePack::new().uint("t", HashType::Sha256 as u64))
+            .uint("td", 1)
+            .encode();
+        let result = Proof::<Sumhash512>::decode(&wire);
+        assert_eq!(
+            result,
+            Err(Error::HashTypeMismatch {
+                expected: HashType::Sumhash512,
+                got: HashType::Sha256,
+            })
+        );
     }
 }

@@ -94,7 +94,7 @@ impl Sumhash {
     /// Absorbs `u=64 || n || m || seed` into [keccak::Shake256] and streams
     /// the output directly into a lookup table — 8 `u64` words per byte position,
     /// 256 sums each. Returns a zeroed sponge ready to accept input.
-    pub(crate) fn new(n: usize, m: usize, seed: &[u8]) -> Self {
+    pub(crate) fn new(n: u16, m: u16, seed: &[u8]) -> Self {
         /* The message block is the portion of the matrix input
         beyond the chaining value.
 
@@ -117,23 +117,21 @@ impl Sumhash {
         in an event that is required in some future use case.
         */
 
-        // Catch oversized params early; `n` and `m` are encoded as `u16` in the SHAKE256 seed.
-        debug_assert!(n <= u16::MAX as usize && m <= u16::MAX as usize,
-            "n and m must fit in u16 for correct matrix derivation");
-
-        let m_bytes = m / 8;
-        let block_size = m_bytes - n * 8;
-
         // Derive the `(n × m)` matrix from SHAKE256 by absorbing
         // `u=64 || n || m || seed`, where `u`, `n` and `m` are
         // little-endian `u16` to match the encoding across all
         // Algorand implementations of sumhash.
         let mut shake = Shake256::new();
         shake.absorb(&64u16.to_le_bytes());  // u: bits per output word
-        shake.absorb(&(n as u16).to_le_bytes());  // n: rows
-        shake.absorb(&(m as u16).to_le_bytes());  // m: columns (bits)
+        shake.absorb(&n.to_le_bytes());      // n: rows
+        shake.absorb(&m.to_le_bytes());      // m: columns (bits)
         shake.absorb(seed);
         shake.flip();
+
+        // Widen to usize for allocations and arithmetic below.
+        let n = n as usize;
+        let m_bytes = m as usize / 8;
+        let block_size = m_bytes - n * 8;
 
         // Stream `(n × m)` `u64` values from SHAKE256 directly into
         // the lookup table 8 words at a time (one column group per byte
@@ -327,7 +325,7 @@ impl Sumhash {
 
 // ── Sumhash512 ────────────────────────────────────────────────────────────────
 
-/// [Sumhash] instantiated with Algorand's fixed parameters: `n=8` output words,
+/// `Sumhash` instantiated with Algorand's fixed parameters: `n=8` output words,
 /// `m=1024`-bit input block, `seed=b"Algorand"` for domain separation.
 ///
 /// The matrix derived from [keccak::Shake256] is 8 × 1024 `u64` entries;
