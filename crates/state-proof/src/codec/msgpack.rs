@@ -1,6 +1,6 @@
 // crates/state-proof/src/codec/msgpack.rs
 
-use super::Error;
+use super::DecodeError;
 
 
 // ── Format constants ──────────────────────────────────────────────────────────
@@ -247,76 +247,76 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads a single byte and advances the cursor.
-    fn read_byte(&mut self) -> Result<u8, Error> {
-        if self.pos >= self.data.len() { return Err(Error::UnexpectedEof); }
+    fn read_byte(&mut self) -> Result<u8, DecodeError> {
+        if self.pos >= self.data.len() { return Err(DecodeError::UnexpectedEof); }
         let b = self.data[self.pos];
         self.pos += 1;
         Ok(b)
     }
 
     /// Reads `n` bytes as a slice and advances the cursor.
-    fn read_bytes(&mut self, n: usize) -> Result<&'a [u8], Error> {
-        if self.pos + n > self.data.len() { return Err(Error::UnexpectedEof); }
+    fn read_bytes(&mut self, n: usize) -> Result<&'a [u8], DecodeError> {
+        if self.pos + n > self.data.len() { return Err(DecodeError::UnexpectedEof); }
         let slice = &self.data[self.pos..self.pos + n];
         self.pos += n;
         Ok(slice)
     }
 
     /// Reads a big-endian `u16` value.
-    fn read_u16(&mut self) -> Result<u16, Error> {
+    fn read_u16(&mut self) -> Result<u16, DecodeError> {
         let b = self.read_bytes(2)?;
         Ok(u16::from_be_bytes([b[0], b[1]]))
     }
 
     /// Reads a big-endian `u32` value.
-    fn read_u32(&mut self) -> Result<u32, Error> {
+    fn read_u32(&mut self) -> Result<u32, DecodeError> {
         let b = self.read_bytes(4)?;
         Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
     }
 
     /// Reads a big-endian `u64` value.
-    fn read_u64(&mut self) -> Result<u64, Error> {
+    fn read_u64(&mut self) -> Result<u64, DecodeError> {
         let b = self.read_bytes(8)?;
         Ok(u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
     }
 
     /// Reads a `MessagePack` map header and returns the number of key-value pairs.
-    pub(crate) fn read_map_len(&mut self) -> Result<usize, Error> {
+    pub(crate) fn read_map_len(&mut self) -> Result<usize, DecodeError> {
         let b = self.read_byte()?;
         match b {
             0x80..=0x8f => Ok((b & 0x0f) as usize),
             0xde => Ok(self.read_u16()? as usize),
             0xdf => Ok(self.read_u32()? as usize),
-            _ => Err(Error::UnexpectedType { expected: "map", got: b }),
+            _ => Err(DecodeError::UnexpectedType { expected: "map", got: b }),
         }
     }
 
     /// Reads a `MessagePack` array header and returns the number of elements.
-    pub(crate) fn read_array_len(&mut self) -> Result<usize, Error> {
+    pub(crate) fn read_array_len(&mut self) -> Result<usize, DecodeError> {
         let b = self.read_byte()?;
         match b {
             0x90..=0x9f => Ok((b & 0x0f) as usize),
             0xdc => Ok(self.read_u16()? as usize),
             0xdd => Ok(self.read_u32()? as usize),
-            _ => Err(Error::UnexpectedType { expected: "array", got: b }),
+            _ => Err(DecodeError::UnexpectedType { expected: "array", got: b }),
         }
     }
 
     /// Reads a `MessagePack` string and returns it as a UTF-8 `&str`.
-    pub(crate) fn read_str(&mut self) -> Result<&'a str, Error> {
+    pub(crate) fn read_str(&mut self) -> Result<&'a str, DecodeError> {
         let b = self.read_byte()?;
         let len = match b {
             0xa0..=0xbf => (b & 0x1f) as usize,
             0xd9 => self.read_byte()? as usize,
             0xda => self.read_u16()? as usize,
             0xdb => self.read_u32()? as usize,
-            _ => return Err(Error::UnexpectedType { expected: "str", got: b }),
+            _ => return Err(DecodeError::UnexpectedType { expected: "str", got: b }),
         };
-        std::str::from_utf8(self.read_bytes(len)?).map_err(|_| Error::InvalidUtf8)
+        std::str::from_utf8(self.read_bytes(len)?).map_err(|_| DecodeError::InvalidUtf8)
     }
 
     /// Reads a `MessagePack` unsigned integer and returns it as `u64`.
-    pub(crate) fn read_uint(&mut self) -> Result<u64, Error> {
+    pub(crate) fn read_uint(&mut self) -> Result<u64, DecodeError> {
         let b = self.read_byte()?;
         match b {
             0x00..=0x7f => Ok(b as u64),
@@ -324,18 +324,18 @@ impl<'a> Reader<'a> {
             0xcd => Ok(self.read_u16()? as u64),
             0xce => Ok(self.read_u32()? as u64),
             0xcf => self.read_u64(),
-            _ => Err(Error::UnexpectedType { expected: "uint", got: b }),
+            _ => Err(DecodeError::UnexpectedType { expected: "uint", got: b }),
         }
     }
 
     /// Reads a `MessagePack` binary value and returns it as a byte slice.
-    pub(crate) fn read_bin(&mut self) -> Result<&'a [u8], Error> {
+    pub(crate) fn read_bin(&mut self) -> Result<&'a [u8], DecodeError> {
         let b = self.read_byte()?;
         let len = match b {
             0xc4 => self.read_byte()? as usize,
             0xc5 => self.read_u16()? as usize,
             0xc6 => self.read_u32()? as usize,
-            _ => return Err(Error::UnexpectedType { expected: "bin", got: b }),
+            _ => return Err(DecodeError::UnexpectedType { expected: "bin", got: b }),
         };
         self.read_bytes(len)
     }
@@ -343,7 +343,7 @@ impl<'a> Reader<'a> {
     /// Skips one complete `MessagePack` value. Handles all MsgPack types,
     /// including nested maps and arrays by recursing once per contained 
     /// element. Used to step past unknown keys during map decoding.
-    pub(crate) fn skip(&mut self) -> Result<(), Error> {
+    pub(crate) fn skip(&mut self) -> Result<(), DecodeError> {
         let b = self.read_byte()?;
         match b {
             0x00..=0x7f => Ok(()),  // positive fixint
@@ -381,7 +381,7 @@ impl<'a> Reader<'a> {
             0xde => { let n = self.read_u16()? as usize; for _ in 0..n * 2 { self.skip()?; } Ok(()) } // map16
             0xdf => { let n = self.read_u32()? as usize; for _ in 0..n * 2 { self.skip()?; } Ok(()) } // map32
             0xe0..=0xff => Ok(()),  // negative fixint
-            _ => Err(Error::UnexpectedType { expected: "any", got: b }),  // 0xc1: never used per spec
+            _ => Err(DecodeError::UnexpectedType { expected: "any", got: b }),  // 0xc1: never used per spec
         }
     }
 }
@@ -394,14 +394,14 @@ impl<'a> Reader<'a> {
 pub(crate) trait MsgPackDecode: Sized {
     /// Decodes one value from a shared `Reader` cursor; used when parsing a field
     /// within a larger structure. Does not check for trailing bytes.
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error>;
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError>;
 
-    /// Decodes `Self` from a complete byte slice. Returns [Error::TrailingBytes]
+    /// Decodes `Self` from a complete byte slice. Returns [DecodeError::TrailingBytes]
     /// if any bytes remain unconsumed after the value, guarding against truncated reads.
-    fn decode(bytes: &[u8]) -> Result<Self, Error> {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         let mut r = Reader::new(bytes);
         let val = Self::decode_from(&mut r)?;
-        if r.remaining() > 0 { return Err(Error::TrailingBytes); }
+        if r.remaining() > 0 { return Err(DecodeError::TrailingBytes); }
         Ok(val)
     }
 }
@@ -634,14 +634,14 @@ mod tests {
     #[test]
     fn reader_eof_error() {
         let mut r = Reader::new(&[]);
-        assert_eq!(r.read_map_len(), Err(Error::UnexpectedEof));
+        assert_eq!(r.read_map_len(), Err(DecodeError::UnexpectedEof));
     }
 
     /// Reading a uint tag where a map is expected must return UnexpectedType.
     #[test]
     fn reader_wrong_type_error() {
         let mut r = Reader::new(&[0x01]); // fixint, not a map
-        assert!(matches!(r.read_map_len(), Err(Error::UnexpectedType { .. })));
+        assert!(matches!(r.read_map_len(), Err(DecodeError::UnexpectedType { .. })));
     }
 
     /// Trailing bytes after a valid value must return TrailingBytes.
@@ -649,13 +649,13 @@ mod tests {
     fn from_msgpack_trailing_bytes_error() {
         struct Dummy;
         impl MsgPackDecode for Dummy {
-            fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
+            fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
                 r.read_map_len()?;
                 Ok(Dummy)
             }
         }
         let bytes = vec![0x80, 0xff]; // empty map + stray byte
-        assert!(matches!(Dummy::decode(&bytes), Err(Error::TrailingBytes)));
+        assert!(matches!(Dummy::decode(&bytes), Err(DecodeError::TrailingBytes)));
     }
 
     // ── Round-trips ───────────────────────────────────────────────────────────
@@ -670,7 +670,7 @@ mod tests {
             }
         }
         impl MsgPackDecode for Wrapper {
-            fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
+            fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
                 let n = r.read_map_len()?;
                 let mut v = 0u64;
                 for _ in 0..n {
@@ -699,7 +699,7 @@ mod tests {
             }
         }
         impl MsgPackDecode for Wrapper {
-            fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
+            fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
                 let n = r.read_map_len()?;
                 let mut d = vec![];
                 for _ in 0..n {

@@ -3,13 +3,13 @@
 
 use merkle::{Sumhash512, Sumhash512Digest, HashFactory, HashType, Proof, SUMHASH512_DIGEST_SIZE};
 
-use crate::codec::{AlgorandMessagePack, Error, MsgPackDecode, MsgPackEncode, Reader};
+use crate::codec::{AlgorandMessagePack, DecodeError, MsgPackDecode, MsgPackEncode, Reader};
 
 // ── HashType ──────────────────────────────────────────────────────────────────
 
 impl MsgPackDecode for HashType {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
-        HashType::try_from(r.read_uint()?).map_err(Error::InvalidHashType)
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        HashType::try_from(r.read_uint()?).map_err(DecodeError::InvalidHashType)
     }
 }
 
@@ -23,7 +23,7 @@ impl MsgPackEncode for HashFactory {
 }
 
 impl MsgPackDecode for HashFactory {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
         let mut hash_type = HashType::Sha512_256;
         for _ in 0..n {
@@ -49,7 +49,7 @@ impl MsgPackEncode for Proof<Sumhash512> {
 }
 
 impl MsgPackDecode for Proof<Sumhash512> {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
         let mut tree_depth: u8 = 0;
         let mut path: Vec<Sumhash512Digest> = Vec::new();
@@ -63,7 +63,7 @@ impl MsgPackDecode for Proof<Sumhash512> {
                     for _ in 0..len {
                         let bytes = r.read_bin()?;
                         if bytes.len() != SUMHASH512_DIGEST_SIZE {
-                            return Err(Error::InvalidDigestSize { expected: SUMHASH512_DIGEST_SIZE, got: bytes.len() });
+                            return Err(DecodeError::InvalidDigestSize { expected: SUMHASH512_DIGEST_SIZE, got: bytes.len() });
                         }
                         let mut digest = [0u8; SUMHASH512_DIGEST_SIZE];
                         digest.copy_from_slice(bytes);
@@ -75,7 +75,7 @@ impl MsgPackDecode for Proof<Sumhash512> {
             }
         }
         if hash_factory.hash_type != HashType::Sumhash512 {
-            return Err(Error::HashTypeMismatch {
+            return Err(DecodeError::HashTypeMismatch {
                 expected: HashType::Sumhash512,
                 got: hash_factory.hash_type,
             });
@@ -154,7 +154,7 @@ mod tests {
         let result = Proof::<Sumhash512>::decode(&wire);
         assert_eq!(
             result,
-            Err(Error::HashTypeMismatch {
+            Err(DecodeError::HashTypeMismatch {
                 expected: HashType::Sumhash512,
                 got: HashType::Sha256,
             })

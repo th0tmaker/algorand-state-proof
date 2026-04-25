@@ -15,7 +15,7 @@
 //   part_commitment  = base64-decode(PREV_SP_VOTERS_COMMITMENT)
 //   ln_proven_weight = PREV_SP_LN_PROVEN_WEIGHT
 //
-// msg_hash = SHA-512/256("spm" || canonical_msgpack(current message))
+// msg_hash = SHA-256("spm" || canonical_msgpack(current message))
 // strength_target = 256  (Algorand mainnet StateProofStrengthTarget)
 
 use algorand_state_proof::{StateProof, verify_state_proof};
@@ -39,7 +39,6 @@ const PREV_SP_VOTERS_COMMITMENT: &str =
 
 const ROUND:            u64 = SP_LATEST_RND;
 const LN_PROVEN_WEIGHT: u64 = PREV_SP_LN_PROVEN_WEIGHT;
-const STRENGTH_TARGET:  u64 = 256;
 
 /// Trusted participant commitment = base64-decode(`PREV_SP_VOTERS_COMMITMENT`).
 const PART_COMMITMENT: [u8; 64] = [
@@ -53,12 +52,12 @@ const PART_COMMITMENT: [u8; 64] = [
     0x6c, 0x04, 0xc2, 0x42, 0xbe, 0x9c, 0x13, 0x59,
 ];
 
-/// SHA-512/256("spm" || canonical_msgpack(StateProofMessage for round 60000000)).
+/// SHA-256("spm" || canonical_msgpack(StateProofMessage for round 60000000)).
 const MSG_HASH: [u8; 32] = [
-    0xee, 0xbf, 0xd2, 0x83, 0xc7, 0xae, 0x4f, 0xf5,
-    0x60, 0x83, 0x9c, 0x2f, 0xa2, 0xe6, 0xf6, 0x24,
-    0x5f, 0xb1, 0xdc, 0xd9, 0x0a, 0x19, 0xcf, 0x2f,
-    0x73, 0x5d, 0x5c, 0xf8, 0x83, 0x48, 0x90, 0x21,
+    0x39, 0x3e, 0x12, 0x31, 0xa9, 0x36, 0x90, 0x27,
+    0xd5, 0x84, 0x61, 0xc9, 0x0e, 0x4b, 0xc1, 0xfe,
+    0x52, 0xd8, 0x3c, 0x63, 0x41, 0xc9, 0xb2, 0x78,
+    0x13, 0x6a, 0xd9, 0x94, 0x83, 0xb4, 0x1e, 0xd2,
 ];
 
 static FIXTURE: &[u8] = include_bytes!("fixtures/stateproof_60000000.bin");
@@ -74,6 +73,6 @@ fn decode_mainnet_state_proof() {
 #[test]
 fn verify_mainnet_state_proof() {
     let sp = StateProof::from_msgpack(FIXTURE).expect("decode failed");
-    verify_state_proof(&sp, &PART_COMMITMENT, LN_PROVEN_WEIGHT, STRENGTH_TARGET, ROUND, &MSG_HASH)
+    verify_state_proof(&sp, &PART_COMMITMENT, LN_PROVEN_WEIGHT, ROUND, &MSG_HASH)
         .expect("verification failed");
 }

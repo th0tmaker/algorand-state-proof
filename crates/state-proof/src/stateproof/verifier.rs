@@ -1,20 +1,25 @@
 // crates/state-proof/src/stateproof/verifier.rs
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 use algorand_falcon_keys::{PublicKey, FALCON_DET1024_PUBKEY_SIZE};
 use merkle::{hash_obj, Hashable, Sumhash512, Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
 
-use super::MERKLE_MAX_ENCODED_TREE_DEPTH;
-
 use super::{
     CoinChoiceSeed, CoinGenerator, LN2_FIXED_POINT, MERKLE_SIG_SCHEME_ID, MessageHash,
-    MerkleSignatureScheme, Participant, Reveal, SigSlotCommit, StateProof, ln_int_approximation,
+    MerkleSignatureScheme, Participant, Reveal, SigSlotCommit, StateProof, VC_PROOF_MAX_DEPTH,
+    ln_int_approximation,
 };
+
+/// Security-strength target for state proof soundness: `256 = k + 2q` where `(k=128, q=64)`
+/// accounts for a quantum attacker's Grover-style speedup over the hash-based components.
+/// Matches Algorand mainnet `StateProofStrengthTarget`. [Setting Security Strength]
+const STRENGTH_TARGET: u16 = 256;
 
 // ── VerifyError ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum VerifyError {
     /// The `signed_weight` does not exceed `ln_proven_weight` in log-space.
     SignedWeightTooLow,
@@ -43,6 +48,41 @@ pub enum VerifyError {
     /// The `reveals` map contains duplicate positions; the proof is malformed.
     DuplicateRevealPosition,
 }
+
+impl fmt::Display for VerifyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SignedWeightTooLow =>
+                write!(f, "signed weight does not exceed the proven weight threshold"),
+            Self::InsufficientReveals =>
+                write!(f, "insufficient reveals to satisfy the security-strength inequality"),
+            Self::TreeDepthTooLarge { field, depth } =>
+                write!(f, "{field} tree depth {depth} exceeds protocol maximum"),
+            Self::SaltVersionMismatch { position } =>
+                write!(f, "salt version mismatch at reveal position {position}"),
+            Self::MissingReveal { position } =>
+                write!(f, "no reveal entry for coin position {position}"),
+            Self::SigProofFailed =>
+                write!(f, "batch Merkle proof for signature commitment failed"),
+            Self::PartProofFailed =>
+                write!(f, "batch Merkle proof for participant commitment failed"),
+            Self::VcProofFailed { position } =>
+                write!(f, "ephemeral key VC proof failed at position {position}"),
+            Self::FalconVerifyFailed { position } =>
+                write!(f, "Falcon signature verification failed at position {position}"),
+            Self::SigConversionFailed { position } =>
+                write!(f, "failed to convert signature to CT format at position {position}"),
+            Self::CoinOutOfRange { index, position, coin } =>
+                write!(f, "coin {coin} at index {index} (position {position}) is outside the participant's weight range"),
+            Self::WeightRangeOverflow { position } =>
+                write!(f, "participant weight range overflows u64 at position {position}"),
+            Self::DuplicateRevealPosition =>
+                write!(f, "reveals map contains duplicate positions"),
+        }
+    }
+}
+
+impl std::error::Error for VerifyError {}
 
 // ── Leaf-hash helpers ─────────────────────────────────────────────────────────
 
@@ -107,10 +147,28 @@ fn hash_participant_leaf(h: &mut Sumhash512, p: &Participant) -> Sumhash512Diges
     hash_obj(h, &ParticipantLeaf(p))
 }
 
-/// Builds the `l(8) || sig_fixed_repr` preimage for `slot` and returns its Sumhash512 leaf digest
-/// for batch VC proof verification against `sig_commit`.
+/// Wraps the empty-slot padding constant for hashing.
+/// When a participant did not sign, the sig tree leaf is `Hash("MB")`.
+struct EmptySigLeaf;
+impl Hashable for EmptySigLeaf {
+    fn to_be_hashed(&self) -> (&'static [u8], Vec<u8>) { (b"MB", vec![]) }
+}
+
+/// Returns true if the sig slot carries no real signature (participant did not sign).
+/// A minimal 2-byte compressed sig (header + salt only, zero Falcon data) signals empty.
+fn sig_slot_is_empty(slot: &SigSlotCommit) -> bool {
+    slot.mss.sig.as_bytes().len() <= 2
+}
+
+/// Computes the Sumhash512 leaf digest for `slot` in the sig VC tree.
+///
+/// Empty slots (participant did not sign) → `Hash("MB")` (the VC bottom leaf).
+/// Non-empty slots → `Hash("sps" || L(8 LE) || GetFixedLengthHashableRepresentation(sig))`.
 fn hash_sig_slot_leaf(h: &mut Sumhash512, pos: u64, slot: &SigSlotCommit) -> Result<Sumhash512Digest, VerifyError> {
-    // Convert compressed signature to constant-time form; required for the fixed-repr layout.
+    if sig_slot_is_empty(slot) {
+        return Ok(hash_obj(h, &EmptySigLeaf));
+    }
+
     let sig_repr = slot.mss.to_fixed_bytes()
         .map_err(|_| VerifyError::SigConversionFailed { position: pos })?;
 
@@ -138,7 +196,7 @@ fn first_round_in_key_lifetime(round: u64, key_lifetime: u64) -> u64 {
 /// Verifies a single `MerkleSignatureScheme` in two steps:
 /// 1. VC proof — proves the ephemeral key is committed at `mss.vc_index` in the participant's key tree.
 /// 2. Falcon — proves the ephemeral key signed `msg_hash` for this round.
-fn verify_merkle_sig(
+fn verify_merkle_sig_scheme(
     h: &mut Sumhash512,
     mss: &MerkleSignatureScheme,
     commitment: &Sumhash512Digest,
@@ -171,27 +229,25 @@ fn verify_merkle_sig(
 ///
 /// ### Parameters
 /// * `state_proof` — decoded from network wire bytes.
-/// * `part_commitment` — trusted root of the participants Merkle tree.
-/// * `ln_proven_weight` — `ceil(2^16 · ln(proven_weight))`, fixed-point log of the weight threshold.
-/// * `strength_target` — security-level parameter (typically 128); must be non-zero — passing 0 trivially satisfies the inequality.
-/// * `round` — the block round being attested.
-/// * `msg_hash` — SHA-256 of the attested message.
+/// * `part_commitment` — trusted root of the participants Merkle tree (from the previous state proof's message).
+/// * `ln_proven_weight` — `ceil(2^16 · ln(proven_weight))` from the previous state proof's message.
+/// * `round` — the last attested round (`lastAttestedRound` from the current state proof's message).
+/// * `msg_hash` — `SHA-256("spm" || canonical_msgpack(current_state_proof_message))`.
 pub fn verify_state_proof(
     state_proof: &StateProof,
     part_commitment: &Sumhash512Digest,
     ln_proven_weight: u64,
-    strength_target: u64,
     round: u64,
     msg_hash: &MessageHash,
 ) -> Result<(), VerifyError> {
     // ── 1. Reject trees that exceed the protocol depth limit ──────────────────
-    if state_proof.sig_proofs.tree_depth > MERKLE_MAX_ENCODED_TREE_DEPTH {
+    if state_proof.sig_proofs.tree_depth > VC_PROOF_MAX_DEPTH {
         return Err(VerifyError::TreeDepthTooLarge {
             field: "sig_proofs",
             depth: state_proof.sig_proofs.tree_depth,
         });
     }
-    if state_proof.part_proofs.tree_depth > MERKLE_MAX_ENCODED_TREE_DEPTH {
+    if state_proof.part_proofs.tree_depth > VC_PROOF_MAX_DEPTH {
         return Err(VerifyError::TreeDepthTooLarge {
             field: "part_proofs",
             depth: state_proof.part_proofs.tree_depth,
@@ -208,7 +264,7 @@ pub fn verify_state_proof(
     // Both sides fit in u128 (reveals ≤ 2^20, denom ≤ 2^22 → product ≤ 2^42).
     let denom = ln_signed - ln_proven_weight;
     let lhs = state_proof.positions_to_reveal.len() as u128 * denom as u128;
-    let rhs = strength_target as u128 * LN2_FIXED_POINT as u128;
+    let rhs = STRENGTH_TARGET as u128 * LN2_FIXED_POINT as u128;
     if lhs < rhs {
         return Err(VerifyError::InsufficientReveals);
     }
@@ -223,14 +279,7 @@ pub fn verify_state_proof(
         return Err(VerifyError::DuplicateRevealPosition);
     }
 
-    // ── 4. Salt version must be consistent across all reveals ─────────────────
-    for &(pos, ref reveal) in &state_proof.reveals {
-        if reveal.sig_slot.mss.salt_version() != state_proof.mss_salt_version {
-            return Err(VerifyError::SaltVersionMismatch { position: pos });
-        }
-    }
-
-    // ── 5. Per-reveal: VC proof + Falcon + build batch-proof element lists ────
+    // ── 4. Per-reveal: salt check + VC proof + Falcon + build batch-proof lists ─
     // A single Sumhash512 context is shared across all calls; `hash_obj`
     // resets the hasher internally so each call is independent.
     let mut h = Sumhash512::new();
@@ -240,32 +289,42 @@ pub fn verify_state_proof(
         Vec::with_capacity(state_proof.reveals.len());
 
     for &(pos, ref reveal) in &state_proof.reveals {
-        verify_merkle_sig(
-            &mut h,
-            &reveal.sig_slot.mss,
-            &reveal.participant.pk.commitment,
-            round,
-            reveal.participant.pk.key_lifetime,
-            msg_hash,
-            pos,
-        )?;
+        // All non-empty reveals must share the same salt version.
+        if !sig_slot_is_empty(&reveal.sig_slot)
+            && reveal.sig_slot.mss.salt_version() != state_proof.mss_salt_version
+        {
+            return Err(VerifyError::SaltVersionMismatch { position: pos });
+        }
+
+        // Empty slots (participant did not sign) skip Falcon+VC proof — their sig leaf is Hash("MB").
+        if !sig_slot_is_empty(&reveal.sig_slot) {
+            verify_merkle_sig_scheme(
+                &mut h,
+                &reveal.sig_slot.mss,
+                &reveal.participant.pk.commitment,
+                round,
+                reveal.participant.pk.key_lifetime,
+                msg_hash,
+                pos,
+            )?;
+        }
 
         // Safe: tree positions are bounded by tree depth ≤ 20 (< 2^20), well within usize on all platforms.
         sig_elems.push((pos as usize, hash_sig_slot_leaf(&mut h, pos, &reveal.sig_slot)?));
         part_elems.push((pos as usize, hash_participant_leaf(&mut h, &reveal.participant)));
     }
 
-    // ── 6. Batch VC proof for the signature commitment ────────────────────────
+    // ── 5. Batch VC proof for the signature commitment ────────────────────────
     if !state_proof.sig_proofs.verify_batch_vc(&sig_elems, &state_proof.sig_commitment) {
         return Err(VerifyError::SigProofFailed);
     }
 
-    // ── 7. Batch VC proof for the participant commitment ──────────────────────
+    // ── 6. Batch VC proof for the participant commitment ──────────────────────
     if !state_proof.part_proofs.verify_batch_vc(&part_elems, part_commitment) {
         return Err(VerifyError::PartProofFailed);
     }
 
-    // ── 8. Coin generation and weight-range check ─────────────────────────────
+    // ── 7. Coin generation and weight-range check ─────────────────────────────
     let seed = CoinChoiceSeed {
         part_commitment: *part_commitment,
         ln_proven_weight,

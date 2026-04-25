@@ -1,14 +1,9 @@
 // crates/state-proof/src/stateproof/mod.rs
 
-// NOTE: Build State Proof message support; struct + msgpack codec + hash_msg function
-// Maybe impl Hashable for StateProofMessage with `hash_obj()`
-
 mod coin;
 mod verifier;
 
-#[allow(unused)]
-pub use coin::{CoinChoiceSeed, CoinGenerator, ln_int_approximation};
-pub(crate) use coin::LN2_FIXED_POINT;
+pub(crate) use coin::{CoinChoiceSeed, CoinGenerator, LN2_FIXED_POINT, ln_int_approximation};
 pub use verifier::{VerifyError, verify_state_proof};
 
 use algorand_falcon_keys::{
@@ -16,9 +11,9 @@ use algorand_falcon_keys::{
     FALCON_DET1024_PUBKEY_SIZE, FALCON_DET1024_SIG_COMPRESSED_HEADER, FALCON_DET1024_SIG_CT_SIZE,
 };
 
-use merkle::{Sumhash512, Proof, Sumhash512Digest, SHA256_DIGEST_SIZE, SUMHASH512_DIGEST_SIZE};
+use merkle::{Sumhash512, Proof, Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
 
-use crate::codec::{Error, MsgPackDecode, Reader};
+use crate::codec::{DecodeError, MsgPackDecode, Reader};
 
 // ── Merkle Constants ──────────────────────────────────────────────────────────
 
@@ -26,17 +21,21 @@ use crate::codec::{Error, MsgPackDecode, Reader};
 /// Included for flexibility; a future suite would be mapped to a different ID.
 pub(crate) const MERKLE_SIG_SCHEME_ID: u16 = 0;
 
-/// Maximum tree depth accepted by the state proof verifier.
+/// Maximum VC tree depth allowed for `sig_proofs` and `part_proofs` in a valid `StateProof`.
 /// Proofs with `tree_depth` exceeding this are rejected as invalid.
-pub const MERKLE_MAX_ENCODED_TREE_DEPTH: u8 = 20;
+pub const VC_PROOF_MAX_DEPTH: u8 = 20;
+
+/// Maximum tree depth for the inner ephemeral-key Merkle Signature Scheme tree.
+/// Used when serialising a `MerkleSignatureScheme` to fixed-length bytes.
+const MSS_PROOF_MAX_DEPTH: u8 = 16;
 
 /// Maximum number of reveals (and positions) permitted in a single `StateProof`.
 pub const MAX_REVEALS: usize = 640;
 
-/// Byte length of the fixed-length [Proof\<Sumhash512\>] binary encoding used in the state proof wire format.
+/// Byte length of the fixed-length inner-proof encoding within a `MerkleSignatureScheme`.
 ///
-/// Format: `tree_depth (1 B) || 20 × Sumhash512 digest slots (64 B each)`.
-pub const SUMHASH512_PROOF_FIXED_REPR_SIZE: usize = 1 + MERKLE_MAX_ENCODED_TREE_DEPTH as usize * SUMHASH512_DIGEST_SIZE;
+/// Format: `tree_depth (1 B) || 16 × Sumhash512 digest slots (64 B each)`.
+pub const SUMHASH512_PROOF_FIXED_REPR_SIZE: usize = 1 + MSS_PROOF_MAX_DEPTH as usize * SUMHASH512_DIGEST_SIZE;
 
 /// Byte length of the fixed-length binary representation of a `MerkleSignatureScheme`.
 ///
@@ -44,20 +43,13 @@ pub const SUMHASH512_PROOF_FIXED_REPR_SIZE: usize = 1 + MERKLE_MAX_ENCODED_TREE_
 pub const MERKLE_SIG_SCHEME_FIXED_REPR_SIZE: usize =
     2 + FALCON_DET1024_SIG_CT_SIZE + FALCON_DET1024_PUBKEY_SIZE + 8 + SUMHASH512_PROOF_FIXED_REPR_SIZE;
 
-// ── Sha256 Constants ──────────────────────────────────────────────────────────
-
-/// Byte length of a SHA-256 digest (32 bytes = 256 bits = 8 × 32-bit words).
-// pub const SHA256_DIGEST_SIZE: usize = 32;
-
-// ── Sha256 Types ──────────────────────────────────────────────────────────────
-
-/// A 32-byte SHA-256 hash digest ed to by the state proof.
+/// SHA-256 hash of the state proof message (`"spm" || canonical_msgpack(message)`).
 pub type MessageHash = [u8; 32];
 
 // ── PublicKey ─────────────────────────────────────────────────────────────────
 
 impl MsgPackDecode for PublicKey {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
         let mut bytes = [0u8; FALCON_DET1024_PUBKEY_SIZE];
         for _ in 0..n {
@@ -65,7 +57,7 @@ impl MsgPackDecode for PublicKey {
                 "k" => {
                     let b = r.read_bin()?;
                     if b.len() != FALCON_DET1024_PUBKEY_SIZE {
-                        return Err(Error::InvalidPublicKeySize { expected: FALCON_DET1024_PUBKEY_SIZE, got: b.len() });
+                        return Err(DecodeError::InvalidPublicKeySize { expected: FALCON_DET1024_PUBKEY_SIZE, got: b.len() });
                     }
                     bytes.copy_from_slice(b);
                 }
@@ -73,17 +65,17 @@ impl MsgPackDecode for PublicKey {
             }
         }
         PublicKey::from_bytes(&bytes)
-            .map_err(|_| Error::InvalidPublicKey)
+            .map_err(|_| DecodeError::InvalidPublicKey)
     }
 }
 
 // ── CompressedSignature ───────────────────────────────────────────────────────
 
 impl MsgPackDecode for CompressedSignature {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let b = r.read_bin()?;
         CompressedSignature::from_bytes(b)
-            .map_err(|_| Error::InvalidSignature)
+            .map_err(|_| DecodeError::InvalidSignature)
     }
 }
 
@@ -112,7 +104,7 @@ impl Default for MerkleVerifier {
 }
 
 impl MsgPackDecode for MerkleVerifier {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
         let mut commitment = [0u8; SUMHASH512_DIGEST_SIZE];
         let mut key_lifetime = 0u64;
@@ -121,7 +113,7 @@ impl MsgPackDecode for MerkleVerifier {
                 "cmt" => {
                     let b = r.read_bin()?;
                     if b.len() != SUMHASH512_DIGEST_SIZE {
-                        return Err(Error::InvalidDigestSize { expected: SUMHASH512_DIGEST_SIZE, got: b.len() });
+                        return Err(DecodeError::InvalidDigestSize { expected: SUMHASH512_DIGEST_SIZE, got: b.len() });
                     }
                     commitment.copy_from_slice(b);
                 }
@@ -185,7 +177,7 @@ impl MerkleSignatureScheme {
         out[pos..pos + 8].copy_from_slice(&self.vc_index.to_le_bytes()); pos += 8;
         // Proof fixed encoding: tree_depth (1 B) || zero-pad for unused slots || path entries
         out[pos] = self.proof.tree_depth; pos += 1;
-        let pad = MERKLE_MAX_ENCODED_TREE_DEPTH.saturating_sub(self.proof.tree_depth) as usize;
+        let pad = MSS_PROOF_MAX_DEPTH.saturating_sub(self.proof.tree_depth) as usize;
         let path_start = pos + pad * SUMHASH512_DIGEST_SIZE;
         for (i, entry) in self.proof.path.iter().enumerate() {
             let offset = path_start + i * SUMHASH512_DIGEST_SIZE;
@@ -201,7 +193,7 @@ impl MerkleSignatureScheme {
 }
 
 impl MsgPackDecode for MerkleSignatureScheme {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
         let mut out = MerkleSignatureScheme::default();
         for _ in 0..n {
@@ -236,7 +228,7 @@ pub struct SigSlotCommit {
 }
 
 impl MsgPackDecode for SigSlotCommit {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
         let mut out = SigSlotCommit::default();
         for _ in 0..n {
@@ -269,7 +261,7 @@ pub struct Participant {
 }
 
 impl MsgPackDecode for Participant {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
         let mut out = Participant::default();
         for _ in 0..n {
@@ -302,7 +294,7 @@ pub struct Reveal {
 }
 
 impl MsgPackDecode for Reveal {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
         let mut out = Reveal::default();
         for _ in 0..n {
@@ -357,7 +349,7 @@ pub struct StateProof {
 }
 
 impl MsgPackDecode for StateProof {
-    fn decode_from(r: &mut Reader<'_>) -> Result<Self, Error> {
+    fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
         let mut sig_commitment = [0u8; SUMHASH512_DIGEST_SIZE];
         let mut signed_weight = 0u64;
@@ -366,9 +358,9 @@ impl MsgPackDecode for StateProof {
         let mut mss_salt_version = 0u8;
         let mut reveals = Vec::new();
         let mut positions_to_reveal = Vec::new();
-        let check_bound = |len: usize| -> Result<usize, Error> {
+        let check_bound = |len: usize| -> Result<usize, DecodeError> {
             if len > MAX_REVEALS {
-                Err(Error::TooManyReveals { got: len, max: MAX_REVEALS })
+                Err(DecodeError::TooManyReveals { got: len, max: MAX_REVEALS })
             } else {
                 Ok(len)
             }
@@ -378,14 +370,14 @@ impl MsgPackDecode for StateProof {
                 "c"  => {
                     let b = r.read_bin()?;
                     if b.len() != SUMHASH512_DIGEST_SIZE {
-                        return Err(Error::InvalidDigestSize { expected: SUMHASH512_DIGEST_SIZE, got: b.len() });
+                        return Err(DecodeError::InvalidDigestSize { expected: SUMHASH512_DIGEST_SIZE, got: b.len() });
                     }
                     sig_commitment.copy_from_slice(b);
                 }
                 "w" => {
                     signed_weight = r.read_uint()?;
                     if signed_weight == 0 {
-                        return Err(Error::ZeroSignedWeight);
+                        return Err(DecodeError::ZeroSignedWeight);
                     }
                 }
                 "S" => sig_proofs = Proof::decode_from(r)?,
@@ -424,41 +416,8 @@ impl MsgPackDecode for StateProof {
 
 impl StateProof {
     /// Decodes a `StateProof` from Algorand canonical MessagePack wire bytes.
-    pub fn from_msgpack(bytes: &[u8]) -> Result<Self, Error> {
+    pub fn from_msgpack(bytes: &[u8]) -> Result<Self, DecodeError> {
         StateProof::decode(bytes)
     }
 }
 
-// // ── StateProofMessage ─────────────────────────────────────────────────────────
-
-// /// A post-quantum state proof attesting to the Algorand block state at a given round.
-// ///
-// /// Received from the network and verified against a known `sig_commit` root and
-// /// `signed_weight`. Codec keys match the Algorand wire format exactly.
-// ///
-// /// Codec keys: `"b"`, `"f"`, `"l"`, `"P"`, `"v"`.
-// #[derive(Clone, Debug, Eq, PartialEq)]
-// pub struct StateProofMessage {
-//     /// The [merkle::VcTree] `root` over all light block headers within the State Proof 
-//     /// interval — i.e., the blocks from round first-attested-round to latest-attested-round.
-//     ///
-//     /// Codec key: `"b"`.
-//     pub block_headers_commitment: [u8; SHA256_DIGEST_SIZE],
-//     /// .
-//     ///
-//     /// Codec key: `"f"`.
-//     pub first_attested_round: u64,
-//     /// .
-//     ///
-//     /// Codec key: `"l"`.
-//     pub latest_attested_round: u64,
-
-//     /// .
-//     ///
-//     /// Codec key: `"P"`.
-//     pub ln_proven_weight: u64,
-//     /// .
-//     ///
-//     /// Codec key: `"v"`.
-//     pub voters_commitment: Sumhash512Digest,
-// }
