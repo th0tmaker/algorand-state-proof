@@ -79,11 +79,15 @@ impl HashFactory {
 // ── Hashable ──────────────────────────────────────────────────────────────────
 
 /// An object that can be cryptographically hashed into a tree leaf.
-/// The domain prefix prevents cross-type collisions.
+///
+/// Implementations feed the domain prefix and data directly into the hasher,
+/// avoiding intermediate heap allocation.
 pub trait Hashable {
-    /// Returns `(domain, data)` for hashing. The `domain` prefix prevents collisions
-    /// between different object types with identical byte representations.
-    fn to_be_hashed(&self) -> (&'static [u8], Vec<u8>);
+    /// Feeds this object's domain prefix and payload into `h`.
+    ///
+    /// Implementations must call `h.update(domain)` first, then `h.update(data...)`
+    /// for each data segment. The caller is responsible for calling `finalize_reset`.
+    fn hash_into<H: MerkleHasher>(&self, h: &mut H);
 }
 
 
@@ -166,14 +170,13 @@ impl MerkleHasher for Sha256 {
 
 // ── Hash helpers ──────────────────────────────────────────────────────────────
 
-/// Computes `Hash(domain || data)` for `obj`, reusing `h` across calls.
+/// Hashes `obj` into a digest, reusing `h` across calls.
 ///
-/// For [Sumhash512], reusing `h` avoids rebuilding the expensive lookup table.
-/// Pass the same `h` for all leaves when building or verifying a tree.
+/// Calls `obj.hash_into(h)` (which feeds domain + data directly into the hasher)
+/// then finalizes and resets. For [Sumhash512], reusing `h` avoids rebuilding
+/// the expensive lookup table.
 pub fn hash_obj<H: MerkleHasher>(h: &mut H, obj: &impl Hashable) -> H::Digest {
-    let (domain, data) = obj.to_be_hashed();
-    h.update(domain);
-    h.update(&data);
+    obj.hash_into(h);
     h.finalize_reset()
 }
 
@@ -486,8 +489,9 @@ mod tests {
     struct TestLeaf(&'static [u8]);
 
     impl Hashable for TestLeaf {
-        fn to_be_hashed(&self) -> (&'static [u8], Vec<u8>) {
-            (b"TE", self.0.to_vec())
+        fn hash_into<H: MerkleHasher>(&self, h: &mut H) {
+            h.update(b"TE");
+            h.update(self.0);
         }
     }
 
@@ -505,7 +509,10 @@ mod tests {
     fn hash_obj_domain_separation() {
         struct OtherLeaf(&'static [u8]);
         impl Hashable for OtherLeaf {
-            fn to_be_hashed(&self) -> (&'static [u8], Vec<u8>) { (b"OT", self.0.to_vec()) }
+            fn hash_into<H: MerkleHasher>(&self, h: &mut H) {
+                h.update(b"OT");
+                h.update(self.0);
+            }
         }
         let mut h = Sumhash512::new();
         let a = hash_obj(&mut h, &TestLeaf(b"hello"));

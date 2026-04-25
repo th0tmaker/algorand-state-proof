@@ -3,7 +3,7 @@
 use std::{collections::HashMap, fmt};
 
 use algorand_falcon_keys::{PublicKey, FALCON_DET1024_PUBKEY_SIZE};
-use merkle::{hash_obj, Hashable, Sumhash512, Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
+use merkle::{hash_obj, Hashable, MerkleHasher, Sumhash512, Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
 
 use super::{
     CoinChoiceSeed, CoinGenerator, LN2_FIXED_POINT, MERKLE_SIG_SCHEME_ID, MessageHash,
@@ -94,13 +94,12 @@ impl std::error::Error for VerifyError {}
 struct ParticipantLeaf<'a>(&'a Participant);
 
 impl Hashable for ParticipantLeaf<'_> {
-    fn to_be_hashed(&self) -> (&'static [u8], Vec<u8>) {
+    fn hash_into<H: MerkleHasher>(&self, h: &mut H) {
         let p = self.0;
-        let mut data = Vec::with_capacity(8 + 8 + SUMHASH512_DIGEST_SIZE);
-        data.extend_from_slice(&p.weight.to_le_bytes());
-        data.extend_from_slice(&p.pk.key_lifetime.to_le_bytes());
-        data.extend_from_slice(&p.pk.commitment);
-        (b"spp", data)
+        h.update(b"spp");
+        h.update(&p.weight.to_le_bytes());
+        h.update(&p.pk.key_lifetime.to_le_bytes());
+        h.update(&p.pk.commitment);
     }
 }
 
@@ -122,25 +121,14 @@ struct CommittablePK<'a> {
 }
 
 impl Hashable for CommittablePK<'_> {
-    fn to_be_hashed(&self) -> (&'static [u8], Vec<u8>) {
-        let mut data = Vec::with_capacity(2 + 8 + FALCON_DET1024_PUBKEY_SIZE);
-        data.extend_from_slice(&MERKLE_SIG_SCHEME_ID.to_le_bytes());
-        data.extend_from_slice(&self.round.to_le_bytes());
-        data.extend_from_slice(self.verifying_key.as_bytes());
-        (b"KP", data)
+    fn hash_into<H: MerkleHasher>(&self, h: &mut H) {
+        h.update(b"KP");
+        h.update(&MERKLE_SIG_SCHEME_ID.to_le_bytes());
+        h.update(&self.round.to_le_bytes());
+        h.update(self.verifying_key.as_bytes());
     }
 }
 
-/// Wraps pre-serialized signature slot bytes for hashing as a leaf in the signatures [merkle::VcTree].
-/// 
-/// Domain tag `"sps"` (state-proof signature). Caller constructs the `l || sig_fixed_repr` preimage.
-struct SigSlotData<'a>(&'a [u8]);
-
-impl Hashable for SigSlotData<'_> {
-    fn to_be_hashed(&self) -> (&'static [u8], Vec<u8>) {
-        (b"sps", self.0.to_vec())
-    }
-}
 
 /// Returns the leaf digest of `p` for batch VC proof verification against `part_commitment`.
 fn hash_participant_leaf(h: &mut Sumhash512, p: &Participant) -> Sumhash512Digest {
@@ -151,7 +139,9 @@ fn hash_participant_leaf(h: &mut Sumhash512, p: &Participant) -> Sumhash512Diges
 /// When a participant did not sign, the sig tree leaf is `Hash("MB")`.
 struct EmptySigLeaf;
 impl Hashable for EmptySigLeaf {
-    fn to_be_hashed(&self) -> (&'static [u8], Vec<u8>) { (b"MB", vec![]) }
+    fn hash_into<H: MerkleHasher>(&self, h: &mut H) {
+        h.update(b"MB");
+    }
 }
 
 /// Returns true if the sig slot carries no real signature (participant did not sign).
@@ -164,6 +154,8 @@ fn sig_slot_is_empty(slot: &SigSlotCommit) -> bool {
 ///
 /// Empty slots (participant did not sign) → `Hash("MB")` (the VC bottom leaf).
 /// Non-empty slots → `Hash("sps" || L(8 LE) || GetFixedLengthHashableRepresentation(sig))`.
+///
+/// Feeds bytes directly into the hasher — no intermediate heap allocation.
 fn hash_sig_slot_leaf(h: &mut Sumhash512, pos: u64, slot: &SigSlotCommit) -> Result<Sumhash512Digest, VerifyError> {
     if sig_slot_is_empty(slot) {
         return Ok(hash_obj(h, &EmptySigLeaf));
@@ -172,11 +164,10 @@ fn hash_sig_slot_leaf(h: &mut Sumhash512, pos: u64, slot: &SigSlotCommit) -> Res
     let sig_repr = slot.mss.to_fixed_bytes()
         .map_err(|_| VerifyError::SigConversionFailed { position: pos })?;
 
-    let mut data = Vec::with_capacity(8 + sig_repr.len());
-    data.extend_from_slice(&slot.l.to_le_bytes());
-    data.extend_from_slice(&sig_repr);
-
-    Ok(hash_obj(h, &SigSlotData(&data)))
+    h.update(b"sps");
+    h.update(&slot.l.to_le_bytes());
+    h.update(&sig_repr);
+    Ok(h.finalize_reset())
 }
 
 // ── Round alignment ───────────────────────────────────────────────────────────
@@ -289,15 +280,15 @@ pub fn verify_state_proof(
         Vec::with_capacity(state_proof.reveals.len());
 
     for &(pos, ref reveal) in &state_proof.reveals {
+        let empty = sig_slot_is_empty(&reveal.sig_slot);
+
         // All non-empty reveals must share the same salt version.
-        if !sig_slot_is_empty(&reveal.sig_slot)
-            && reveal.sig_slot.mss.salt_version() != state_proof.mss_salt_version
-        {
+        if !empty && reveal.sig_slot.mss.salt_version() != state_proof.mss_salt_version {
             return Err(VerifyError::SaltVersionMismatch { position: pos });
         }
 
         // Empty slots (participant did not sign) skip Falcon+VC proof — their sig leaf is Hash("MB").
-        if !sig_slot_is_empty(&reveal.sig_slot) {
+        if !empty {
             verify_merkle_sig_scheme(
                 &mut h,
                 &reveal.sig_slot.mss,
