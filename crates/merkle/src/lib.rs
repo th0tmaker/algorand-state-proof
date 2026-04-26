@@ -14,12 +14,14 @@ pub const SHA256_DIGEST_SIZE: usize = 32;
 
 // ── Merkle constants ───────────────────────────────────────────────────────────
 
-/// Prefix for internal Merkle tree nodes: `Hash("MA" || left || right)`.
-const MERKLE_ARRAY_NODE: &[u8] = b"MA";
+/// Domain prefix for internal Merkle tree nodes: `Sumhash("MA" || left || right)`.
+pub const MERKLE_INTERNAL_NODE: &[u8] = b"MA";
 
-/// Prefix for empty padding leaves ensuring that even unfilled positions in the [VcTree]
-/// have a deterministic and consistent representation rather than being undefined or zero.
-const MERKLE_VC_BOTTOM_LEAF: &[u8] = b"MB";
+/// Domain prefix for empty padding leaves in a [VcTree]: `Hash("MB")`.
+///
+/// Ensures unfilled positions have a deterministic, consistent representation.
+/// Also used as the signature-slot leaf for participants who did not sign.
+pub const MERKLE_VC_BOTTOM_LEAF: &[u8] = b"MB";
 
 
 // ── HashType / HashFactory ────────────────────────────────────────────────────
@@ -162,8 +164,7 @@ impl MerkleHasher for Sha256 {
     }
 
     fn finalize_reset(&mut self) -> Self::Digest {
-        // Swap in a fresh instance and finalize the old one — both steps are O(1).
-        std::mem::take(self).finalize().into()
+        Sha2Digest::finalize_reset(self).into()
     }
 }
 
@@ -182,7 +183,7 @@ pub fn hash_obj<H: MerkleHasher>(h: &mut H, obj: &impl Hashable) -> H::Digest {
 
 /// Computes `Hash("MA" || left || right)` for an internal tree node.
 fn hash_internal_node<H: MerkleHasher>(h: &mut H, left: &H::Digest, right: &H::Digest) -> H::Digest {
-    h.update(MERKLE_ARRAY_NODE);
+    h.update(MERKLE_INTERNAL_NODE);
     h.update(left.as_ref());
     h.update(right.as_ref());
     h.finalize_reset()

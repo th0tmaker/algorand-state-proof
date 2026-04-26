@@ -1,47 +1,21 @@
 // crates/state-proof/src/stateproof/mod.rs
 
 mod coin;
+pub(crate) mod constants;
 mod verifier;
 
-pub(crate) use coin::{CoinChoiceSeed, CoinGenerator, LN2_FIXED_POINT, ln_int_approximation};
 pub use verifier::{VerifyError, verify_state_proof};
+
+pub(crate) use coin::{CoinChoiceSeed, CoinGenerator, ln_int_approximation};
+use constants::{MAX_REVEALS, MERKLE_SIG_SCHEME_FIXED_REPR_SIZE, MERKLE_SIG_SCHEME_ID, MSS_PROOF_MAX_DEPTH};
 
 use algorand_falcon_keys::{
     CompressedSignature, PublicKey,
     FALCON_DET1024_PUBKEY_SIZE, FALCON_DET1024_SIG_COMPRESSED_HEADER, FALCON_DET1024_SIG_CT_SIZE,
 };
-
-use merkle::{Sumhash512, Proof, Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
+use merkle::{Proof, Sumhash512, Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
 
 use crate::codec::{DecodeError, MsgPackDecode, Reader};
-
-// ── Merkle Constants ──────────────────────────────────────────────────────────
-
-/// Identifies the `MerkleSignatureScheme` suite of primitives used in the leaf hash preimages.
-/// Included for flexibility; a future suite would be mapped to a different ID.
-pub(crate) const MERKLE_SIG_SCHEME_ID: u16 = 0;
-
-/// Maximum VC tree depth allowed for `sig_proofs` and `part_proofs` in a valid `StateProof`.
-/// Proofs with `tree_depth` exceeding this are rejected as invalid.
-pub const VC_PROOF_MAX_DEPTH: u8 = 20;
-
-/// Maximum tree depth for the inner ephemeral-key Merkle Signature Scheme tree.
-/// Used when serialising a `MerkleSignatureScheme` to fixed-length bytes.
-const MSS_PROOF_MAX_DEPTH: u8 = 16;
-
-/// Maximum number of reveals (and positions) permitted in a single `StateProof`.
-pub const MAX_REVEALS: usize = 640;
-
-/// Byte length of the fixed-length inner-proof encoding within a `MerkleSignatureScheme`.
-///
-/// Format: `tree_depth (1 B) || 16 × Sumhash512 digest slots (64 B each)`.
-pub const SUMHASH512_PROOF_FIXED_REPR_SIZE: usize = 1 + MSS_PROOF_MAX_DEPTH as usize * SUMHASH512_DIGEST_SIZE;
-
-/// Byte length of the fixed-length binary representation of a `MerkleSignatureScheme`.
-///
-/// Layout: `MerkleSigSchemeID(2) || sig_ct(1538) || pubkey(1793) || vc_index(8) || proof_fixed_repr`
-pub const MERKLE_SIG_SCHEME_FIXED_REPR_SIZE: usize =
-    2 + FALCON_DET1024_SIG_CT_SIZE + FALCON_DET1024_PUBKEY_SIZE + 8 + SUMHASH512_PROOF_FIXED_REPR_SIZE;
 
 /// SHA-256 hash of the state proof message (`"spm" || canonical_msgpack(message)`).
 pub type MessageHash = [u8; 32];

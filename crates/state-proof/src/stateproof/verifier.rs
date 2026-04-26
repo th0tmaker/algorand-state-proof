@@ -2,19 +2,18 @@
 
 use std::{collections::HashMap, fmt};
 
-use algorand_falcon_keys::{PublicKey, FALCON_DET1024_PUBKEY_SIZE};
-use merkle::{hash_obj, Hashable, MerkleHasher, Sumhash512, Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
+use algorand_falcon_keys::PublicKey;
+use merkle::{hash_obj, Hashable, MerkleHasher, Sumhash512, Sumhash512Digest};
 
+use super::constants::{
+    DOMAIN_EMPTY_SLOT, DOMAIN_EPHEMERAL_KEY, DOMAIN_PARTICIPANT, DOMAIN_SIG_SLOT,
+    LN2_FIXED_POINT, MERKLE_SIG_SCHEME_ID, STRENGTH_TARGET, VC_PROOF_MAX_DEPTH,
+};
 use super::{
-    CoinChoiceSeed, CoinGenerator, LN2_FIXED_POINT, MERKLE_SIG_SCHEME_ID, MessageHash,
-    MerkleSignatureScheme, Participant, Reveal, SigSlotCommit, StateProof, VC_PROOF_MAX_DEPTH,
-    ln_int_approximation,
+    CoinChoiceSeed, CoinGenerator, MessageHash, MerkleSignatureScheme,
+    Participant, Reveal, SigSlotCommit, StateProof, ln_int_approximation,
 };
 
-/// Security-strength target for state proof soundness: `256 = k + 2q` where `(k=128, q=64)`
-/// accounts for a quantum attacker's Grover-style speedup over the hash-based components.
-/// Matches Algorand mainnet `StateProofStrengthTarget`. [Setting Security Strength]
-const STRENGTH_TARGET: u16 = 256;
 
 // ── VerifyError ───────────────────────────────────────────────────────────────
 
@@ -71,7 +70,7 @@ impl fmt::Display for VerifyError {
             Self::FalconVerifyFailed { position } =>
                 write!(f, "Falcon signature verification failed at position {position}"),
             Self::SigConversionFailed { position } =>
-                write!(f, "failed to convert signature to CT format at position {position}"),
+                write!(f, "failed signature conversion to CT format at position {position}"),
             Self::CoinOutOfRange { index, position, coin } =>
                 write!(f, "coin {coin} at index {index} (position {position}) is outside the participant's weight range"),
             Self::WeightRangeOverflow { position } =>
@@ -96,7 +95,7 @@ struct ParticipantLeaf<'a>(&'a Participant);
 impl Hashable for ParticipantLeaf<'_> {
     fn hash_into<H: MerkleHasher>(&self, h: &mut H) {
         let p = self.0;
-        h.update(b"spp");
+        h.update(DOMAIN_PARTICIPANT);
         h.update(&p.weight.to_le_bytes());
         h.update(&p.pk.key_lifetime.to_le_bytes());
         h.update(&p.pk.commitment);
@@ -122,7 +121,7 @@ struct CommittablePK<'a> {
 
 impl Hashable for CommittablePK<'_> {
     fn hash_into<H: MerkleHasher>(&self, h: &mut H) {
-        h.update(b"KP");
+        h.update(DOMAIN_EPHEMERAL_KEY);
         h.update(&MERKLE_SIG_SCHEME_ID.to_le_bytes());
         h.update(&self.round.to_le_bytes());
         h.update(self.verifying_key.as_bytes());
@@ -140,7 +139,7 @@ fn hash_participant_leaf(h: &mut Sumhash512, p: &Participant) -> Sumhash512Diges
 struct EmptySigLeaf;
 impl Hashable for EmptySigLeaf {
     fn hash_into<H: MerkleHasher>(&self, h: &mut H) {
-        h.update(b"MB");
+        h.update(DOMAIN_EMPTY_SLOT);
     }
 }
 
@@ -164,7 +163,7 @@ fn hash_sig_slot_leaf(h: &mut Sumhash512, pos: u64, slot: &SigSlotCommit) -> Res
     let sig_repr = slot.mss.to_fixed_bytes()
         .map_err(|_| VerifyError::SigConversionFailed { position: pos })?;
 
-    h.update(b"sps");
+    h.update(DOMAIN_SIG_SLOT);
     h.update(&slot.l.to_le_bytes());
     h.update(&sig_repr);
     Ok(h.finalize_reset())
@@ -328,7 +327,7 @@ pub fn verify_state_proof(
 
     for (i, &pos) in state_proof.positions_to_reveal.iter().enumerate() {
         // MissingReveal fires if a coin lands on a position that has no corresponding reveal entry.
-        let reveal = reveal_map.get(&pos)
+        let reveal = reveal_map.get(&pos).copied()
             .ok_or(VerifyError::MissingReveal { position: pos })?;
         let coin = coins.next_coin();
         let l     = reveal.sig_slot.l;

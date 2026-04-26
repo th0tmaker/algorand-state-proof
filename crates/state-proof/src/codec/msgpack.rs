@@ -1,4 +1,10 @@
 // crates/state-proof/src/codec/msgpack.rs
+//
+// The encode side (write helpers, Value, AlgorandMessagePack, MsgPackEncode) is
+// implemented but only partially exercised today — the decode path drives all
+// current call sites. The module-level allow suppresses those "unused" warnings
+// without scattering attributes across every item.
+#![allow(unused)]
 
 use super::DecodeError;
 
@@ -7,27 +13,26 @@ use super::DecodeError;
 // Named constants are used by the write helpers only; the Reader matches raw
 // literals directly, where inline comments serve the same documentation purpose.
 
-#[allow(unused)] const FIXMAP_BASE: u8 = 0x80;
-#[allow(unused)] const MAP16: u8 = 0xde;
-#[allow(unused)] const MAP32: u8 = 0xdf;
-#[allow(unused)] const FIXARRAY_BASE: u8 = 0x90;
-#[allow(unused)] const ARRAY16: u8 = 0xdc;
-#[allow(unused)] const ARRAY32: u8 = 0xdd;
-#[allow(unused)] const FIXSTR_BASE: u8 = 0xa0;
-#[allow(unused)] const STR8: u8 = 0xd9;
-#[allow(unused)] const BIN8: u8 = 0xc4;
-#[allow(unused)] const BIN16: u8 = 0xc5;
-#[allow(unused)] const BIN32: u8 = 0xc6;
-#[allow(unused)] const UINT8: u8 = 0xcc;
-#[allow(unused)] const UINT16: u8 = 0xcd;
-#[allow(unused)] const UINT32: u8 = 0xce;
-#[allow(unused)] const UINT64: u8 = 0xcf;
+const FIXMAP_BASE:   u8 = 0x80;
+const MAP16:         u8 = 0xde;
+const MAP32:         u8 = 0xdf;
+const FIXARRAY_BASE: u8 = 0x90;
+const ARRAY16:       u8 = 0xdc;
+const ARRAY32:       u8 = 0xdd;
+const FIXSTR_BASE:   u8 = 0xa0;
+const STR8:          u8 = 0xd9;
+const BIN8:          u8 = 0xc4;
+const BIN16:         u8 = 0xc5;
+const BIN32:         u8 = 0xc6;
+const UINT8:         u8 = 0xcc;
+const UINT16:        u8 = 0xcd;
+const UINT32:        u8 = 0xce;
+const UINT64:        u8 = 0xcf;
 
 
 // ── Write helpers ─────────────────────────────────────────────────────────────
 
 /// Encodes a `u64` as the smallest `MessagePack` unsigned integer representation.
-#[allow(unused)]
 fn write_uint(out: &mut Vec<u8>, v: u64) {
     match v {
         0..=0x7f => out.push(v as u8),
@@ -39,7 +44,6 @@ fn write_uint(out: &mut Vec<u8>, v: u64) {
 }
 
 /// Encodes a string with the appropriate `MessagePack` string prefix and length.
-#[allow(unused)]
 fn write_str(out: &mut Vec<u8>, s: &str) {
     let b = s.as_bytes();
     match b.len() {
@@ -51,7 +55,6 @@ fn write_str(out: &mut Vec<u8>, s: &str) {
 }
 
 /// Encodes a byte slice as `MessagePack` binary with the appropriate length prefix.
-#[allow(unused)]
 fn write_bin(out: &mut Vec<u8>, b: &[u8]) {
     match b.len() {
         0..=0xff => { out.push(BIN8);  out.push(b.len() as u8); }
@@ -62,7 +65,6 @@ fn write_bin(out: &mut Vec<u8>, b: &[u8]) {
 }
 
 /// Writes a `MessagePack` collection header (map/array), choosing fix, 16-bit, or 32-bit encoding based on size.
-#[allow(unused)]
 fn write_collection_header(out: &mut Vec<u8>, n: usize, fix: u8, tag16: u8, tag32: u8) {
     match n {
         0..=15 => out.push(fix | n as u8),
@@ -72,13 +74,11 @@ fn write_collection_header(out: &mut Vec<u8>, n: usize, fix: u8, tag16: u8, tag3
 }
 
 /// Writes a `MessagePack` map header for `n` key-value pairs.
-#[allow(unused)]
 fn write_map_header(out: &mut Vec<u8>, n: usize) {
     write_collection_header(out, n, FIXMAP_BASE, MAP16, MAP32);
 }
 
 /// Writes a `MessagePack` array header for `n` elements.
-#[allow(unused)]
 fn write_array_header(out: &mut Vec<u8>, n: usize) {
     write_collection_header(out, n, FIXARRAY_BASE, ARRAY16, ARRAY32);
 }
@@ -87,7 +87,6 @@ fn write_array_header(out: &mut Vec<u8>, n: usize) {
 
 // Typed storage for `AlgorandMessagePack` entries. Data is held in its native
 // form and serialized only when `encode_into()` is called on the containing map.
-#[allow(unused)]
 enum Value {
     /// Unsigned integer value.
     Uint(u64),
@@ -110,7 +109,6 @@ enum Value {
 ///
 /// Keys are sorted lexicographically on [AlgorandMessagePack::encode];
 /// zero and empty fields are omitted automatically.
-#[allow(unused)]
 pub(crate) struct AlgorandMessagePack {
     /// Holds ordered key-value pairs for Algorand MessagePack encoding, where
     /// the key is a string tag and the value is a variant of `Value`.
@@ -132,7 +130,6 @@ impl AlgorandMessagePack {
     }
 
     /// Appends a binary blob field; omitted if `b` is empty.
-    #[allow(unused)]
     pub(crate) fn bytes(mut self, key: &'static str, b: &[u8]) -> Self {
         if !b.is_empty() {
             self.entries.push((key, Value::Bin(b.to_vec())));
@@ -150,7 +147,6 @@ impl AlgorandMessagePack {
     }
 
     /// Appends an array-of-u64 field; omitted if `elems` is empty.
-    #[allow(unused)]
     pub(crate) fn uint_array(mut self, key: &'static str, elems: &[u64]) -> Self {
         if !elems.is_empty() {
             self.entries.push((key, Value::UintArray(elems.to_vec())));
@@ -159,7 +155,6 @@ impl AlgorandMessagePack {
     }
 
     /// Appends an integer-keyed map field; omitted if `entries` is empty.
-    #[allow(unused)]
     pub(crate) fn uint_keyed_map(mut self, key: &'static str, entries: Vec<(u64, AlgorandMessagePack)>) -> Self {
         if !entries.is_empty() {
             self.entries.push((key, Value::UintKeyedMap(entries)));
@@ -216,7 +211,6 @@ impl AlgorandMessagePack {
 // ── MsgPackEncode ─────────────────────────────────────────────────────────────
 
 /// Types that can be encoded as a canonical MessagePack map.
-#[allow(unused)]
 pub(crate) trait MsgPackEncode {
     /// Converts into an intermediate `AlgorandMessagePack` type.
     fn to_msgpack(&self) -> AlgorandMessagePack;
@@ -229,7 +223,6 @@ pub(crate) trait MsgPackEncode {
 // ── Reader ────────────────────────────────────────────────────────────────────
 
 /// Cursor over a borrowed byte slice for reading MessagePack values.
-#[allow(unused)]
 pub(crate) struct Reader<'a> {
     data: &'a [u8],
     pos: usize,
@@ -390,7 +383,6 @@ impl<'a> Reader<'a> {
 // ── MsgPackDecode ─────────────────────────────────────────────────────────────
 
 /// Types that can be decoded from a canonical MessagePack binary form.
-#[allow(unused)]
 pub(crate) trait MsgPackDecode: Sized {
     /// Decodes one value from a shared `Reader` cursor; used when parsing a field
     /// within a larger structure. Does not check for trailing bytes.

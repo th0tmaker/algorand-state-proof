@@ -3,25 +3,8 @@
 use keccak::Shake256;
 use merkle::{Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
 
+use super::constants::{COIN_CHOICE_SEED_SIZE, COIN_GENERATOR_VERSION, DOMAIN_COIN_SEED};
 use super::MessageHash;
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-/// Domain separator used as a prefix to the coin choice seed before hashing.
-const STATE_PROOF_COIN_DOMAIN: &[u8] = b"spc";
-
-/// Salt version byte included in the seed. Changing this produces different
-/// coins for different state proof verification algorithm versions.
-pub const VERSION_FOR_COIN_GENERATOR: u8 = 0;
-
-/// Byte length of the serialized `CoinChoiceSeed`.
-///
-/// Layout: `domain(3) || version(1) || partCommitment(64) || lnProvenWeight(8) || sigCommitment(64) || signedWeight(8) || messageHash(32)`
-pub(crate) const COIN_CHOICE_SEED_SIZE: usize = 3 + 1 + SUMHASH512_DIGEST_SIZE + 8 + SUMHASH512_DIGEST_SIZE + 8 + 32;
-
-/// `ceil(2^16 · ln 2)` — the fixed-point representation of ln(2) in this scheme,
-/// equal to `ln_int_approximation(2)`. Used in the state proof strength inequality.
-pub(crate) const LN2_FIXED_POINT: u64 = 45427;
 
 // ── Ln approximation ─────────────────────────────────────────────────────────
 
@@ -66,8 +49,8 @@ impl CoinChoiceSeed {
         let mut out = [0u8; COIN_CHOICE_SEED_SIZE];
         let mut pos = 0;
 
-        out[pos..pos + 3].copy_from_slice(STATE_PROOF_COIN_DOMAIN); pos += 3;
-        out[pos] = VERSION_FOR_COIN_GENERATOR; pos += 1;
+        out[pos..pos + 3].copy_from_slice(DOMAIN_COIN_SEED); pos += 3;
+        out[pos] = COIN_GENERATOR_VERSION; pos += 1;
         out[pos..pos + SUMHASH512_DIGEST_SIZE].copy_from_slice(&self.part_commitment); pos += SUMHASH512_DIGEST_SIZE;
         out[pos..pos + 8].copy_from_slice(&self.ln_proven_weight.to_le_bytes()); pos += 8;
         out[pos..pos + SUMHASH512_DIGEST_SIZE].copy_from_slice(&self.sig_commitment);  pos += SUMHASH512_DIGEST_SIZE;
@@ -145,6 +128,7 @@ impl CoinGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::constants::LN2_FIXED_POINT;
 
     /// Helper method to create a `CoinChoiceSeed` with test values.
     fn make_test_seed(signed_weight: u64) -> CoinChoiceSeed {
