@@ -1,36 +1,27 @@
 // crates/state-proof/tests/verify_state_proof.rs
 //
-// Known-answer test against a real Algorand mainnet state proof.
+// Known-answer tests against a real Algorand mainnet state proof.
 //
-// State proof transaction:
+// Current state proof transaction:
 //   ID:    U3E4UQIKQF7X2KJWNXAK7F7S6736TOLST5I7MKEGLESK5ZJLSTOQ
-//   Round: 60000133
-//   Covers rounds: 59999745 – 60000000  (sprnd = 60000000)
+//   Round: 60000133  |  Covers rounds: 59999745 – 60000000
 //
-// Previous state proof transaction (supplies the trusted anchor for this proof):
+// Previous state proof transaction (supplies the trusted anchor):
 //   ID:    WH6WHFQIFYZTKTOUTMNZUZV4ENEVWGYFBYVQ2AHENUZ3F4Z4P64Q
 //   Round: 59999877
+//   ln_proven_weight:  2230322
+//   voters_commitment: Yqhs72l9VsNRRfXTDe5ZRmRnsTYP9fm0rp5kywwt8y9Ul39tNa1abC7ceX3+Hy3XnxZogVGzYRZsBMJCvpwTWQ==
 
 use algorand_state_proof::{StateProof, StateProofMessage, TrustAnchor, verify_state_proof};
 
-// ── Current state proof ───────────────────────────────────────────────────────
-
-const SP_TXN_ID:     &str = "U3E4UQIKQF7X2KJWNXAK7F7S6736TOLST5I7MKEGLESK5ZJLSTOQ";
-const SP_TXN_RND:    u64  = 60000133;
-const SP_FIRST_RND:  u64  = 59999745;
-const SP_LATEST_RND: u64  = 60000000;
-
-// ── Previous state proof (trusted anchor source) ──────────────────────────────
-
-const PREV_SP_TXN_ID:          &str = "WH6WHFQIFYZTKTOUTMNZUZV4ENEVWGYFBYVQ2AHENUZ3F4Z4P64Q";
-const PREV_SP_TXN_RND:         u64  = 59999877;
-const PREV_SP_LN_PROVEN_WEIGHT: u64 = 2230322;
-const PREV_SP_VOTERS_COMMITMENT: &str =
-    "Yqhs72l9VsNRRfXTDe5ZRmRnsTYP9fm0rp5kywwt8y9Ul39tNa1abC7ceX3+Hy3XnxZogVGzYRZsBMJCvpwTWQ==";
+const SP_FIRST_RND:  u64 = 59999745;
+const SP_LATEST_RND: u64 = 60000000;
 
 // ── Trusted anchor (from previous state proof message) ────────────────────────
 
-/// `part_commitment` = base64-decode(`PREV_SP_VOTERS_COMMITMENT`).
+const PREV_SP_LN_PROVEN_WEIGHT: u64 = 2230322;
+
+// base64: Yqhs72l9VsNRRfXTDe5ZRmRnsTYP9fm0rp5kywwt8y9Ul39tNa1abC7ceX3+Hy3XnxZogVGzYRZsBMJCvpwTWQ==
 const ANCHOR_PART_COMMITMENT: [u8; 64] = [
     0x62, 0xa8, 0x6c, 0xef, 0x69, 0x7d, 0x56, 0xc3,
     0x51, 0x45, 0xf5, 0xd3, 0x0d, 0xee, 0x59, 0x46,
@@ -43,10 +34,8 @@ const ANCHOR_PART_COMMITMENT: [u8; 64] = [
 ];
 
 // ── Current state proof message ───────────────────────────────────────────────
-// Fields fetched from the Algorand indexer for txn U3E4UQIKQF7X2KJWNXAK7F7S6736TOLST5I7MKEGLESK5ZJLSTOQ.
-// votersCommitment and lnProvenWeight are forward-looking (for the next interval).
 
-/// `block_headers_commitment` = base64-decode(`751g1mbohNWzYqT/R588/5KlcBSl3GpkY9g9T+HCzj4=`)
+// base64: 751g1mbohNWzYqT/R588/5KlcBSl3GpkY9g9T+HCzj4=
 const SP_MSG_BLOCK_HEADERS_COMMITMENT: [u8; 32] = [
     0xef, 0x9d, 0x60, 0xd6, 0x66, 0xe8, 0x84, 0xd5,
     0xb3, 0x62, 0xa4, 0xff, 0x47, 0x9f, 0x3c, 0xff,
@@ -54,7 +43,7 @@ const SP_MSG_BLOCK_HEADERS_COMMITMENT: [u8; 32] = [
     0x63, 0xd8, 0x3d, 0x4f, 0xe1, 0xc2, 0xce, 0x3e,
 ];
 
-/// `voters_commitment` = base64-decode(`SHvN62JrCY6V...`)
+// base64: SHvN62JrCY6VuhDtI8BKJwRH0bHjQyHyMUyecMC+E4p9ulTBwqM4GJNVf8CVX74KUxZN8wpiNvU3R75Izu1MDA==
 const SP_MSG_VOTERS_COMMITMENT: [u8; 64] = [
     0x48, 0x7b, 0xcd, 0xeb, 0x62, 0x6b, 0x09, 0x8e,
     0x95, 0xba, 0x10, 0xed, 0x23, 0xc0, 0x4a, 0x27,
@@ -67,10 +56,8 @@ const SP_MSG_VOTERS_COMMITMENT: [u8; 64] = [
 ];
 
 const SP_MSG_LN_PROVEN_WEIGHT: u64 = 2230235;
-const SP_MSG_FIRST_ATTESTED_RND: u64 = SP_FIRST_RND;
-const SP_MSG_LAST_ATTESTED_RND: u64 = SP_LATEST_RND;
 
-/// Expected SHA-256("spm" || canonical_msgpack(message)).
+// Expected SHA-256("spm" || canonical_msgpack(message)).
 const EXPECTED_MSG_HASH: [u8; 32] = [
     0x39, 0x3e, 0x12, 0x31, 0xa9, 0x36, 0x90, 0x27,
     0xd5, 0x84, 0x61, 0xc9, 0x0e, 0x4b, 0xc1, 0xfe,
@@ -85,14 +72,14 @@ fn make_message() -> StateProofMessage {
         block_headers_commitment: SP_MSG_BLOCK_HEADERS_COMMITMENT,
         voters_commitment: SP_MSG_VOTERS_COMMITMENT,
         ln_proven_weight: SP_MSG_LN_PROVEN_WEIGHT,
-        first_attested_round: SP_MSG_FIRST_ATTESTED_RND,
-        last_attested_round: SP_MSG_LAST_ATTESTED_RND,
+        first_attested_round: SP_FIRST_RND,
+        last_attested_round: SP_LATEST_RND,
     }
 }
 
 fn make_anchor() -> TrustAnchor {
     TrustAnchor {
-        part_commitment:  ANCHOR_PART_COMMITMENT,
+        part_commitment: ANCHOR_PART_COMMITMENT,
         ln_proven_weight: PREV_SP_LN_PROVEN_WEIGHT,
     }
 }
@@ -102,12 +89,23 @@ fn decode_mainnet_state_proof() {
     let sp = StateProof::from_msgpack(FIXTURE).expect("decode failed");
     assert_eq!(sp.signed_weight, 1984993817111541);
     assert_eq!(sp.positions_to_reveal.len(), 149);
+    // reveals.len() < positions_to_reveal.len(): multiple coins can land on the same
+    // heavy participant, so the reveals map deduplicates by tree position.
     assert_eq!(sp.reveals.len(), 67);
 }
 
 #[test]
 fn message_hash_matches_reference() {
     assert_eq!(make_message().hash(), EXPECTED_MSG_HASH);
+}
+
+#[test]
+fn block_index_for_interval_bounds() {
+    let msg = make_message();
+    assert_eq!(msg.block_index_for_round(SP_FIRST_RND), Some(0));
+    assert_eq!(msg.block_index_for_round(SP_LATEST_RND), Some(255));
+    assert_eq!(msg.block_index_for_round(SP_FIRST_RND - 1), None);
+    assert_eq!(msg.block_index_for_round(SP_LATEST_RND + 1), None);
 }
 
 #[test]

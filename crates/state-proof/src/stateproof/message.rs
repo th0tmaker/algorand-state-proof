@@ -48,6 +48,17 @@ impl StateProofMessage {
         Self::decode(bytes)
     }
 
+    /// Canonical msgpack encoding. Keys sorted: P(80) b(98) f(102) l(108) v(118).
+    fn to_msgpack_bytes(&self) -> Vec<u8> {
+        AlgorandMessagePack::new()
+            .uint("P", self.ln_proven_weight)
+            .bytes("b", &self.block_headers_commitment)
+            .uint("f", self.first_attested_round)
+            .uint("l", self.last_attested_round)
+            .bytes("v", &self.voters_commitment)
+            .encode()
+    }
+
     /// Computes `SHA-256("spm" || canonical_msgpack(self))`.
     ///
     /// This is the 32-byte digest signed by participants' ephemeral Falcon keys,
@@ -59,16 +70,13 @@ impl StateProofMessage {
         Sha2Digest::update(&mut h, &encoded);
         Sha2Digest::finalize(h).into()
     }
-
-    /// Canonical msgpack encoding. Keys sorted: P(80) b(98) f(102) l(108) v(118).
-    fn to_msgpack_bytes(&self) -> Vec<u8> {
-        AlgorandMessagePack::new()
-            .uint("P", self.ln_proven_weight)
-            .bytes("b", &self.block_headers_commitment)
-            .uint("f", self.first_attested_round)
-            .uint("l", self.last_attested_round)
-            .bytes("v", &self.voters_commitment)
-            .encode()
+    
+    /// Returns the zero-based leaf index of `round` in this interval's 256-block VcTree,
+    /// for use with `verify_block_header_commitment`. Returns `None` if `round` falls
+    /// before `first_attested_round` or beyond index 255.
+    pub fn block_index_for_round(&self, round: u64) -> Option<usize> {
+        let idx = round.checked_sub(self.first_attested_round)? as usize;
+        if idx > 255 { None } else { Some(idx) }
     }
 }
 
@@ -143,5 +151,53 @@ impl From<&StateProofMessage> for TrustAnchor {
             part_commitment: msg.voters_commitment,
             ln_proven_weight: msg.ln_proven_weight,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_msg(first: u64, last: u64) -> StateProofMessage {
+        StateProofMessage {
+            block_headers_commitment: [1u8; SHA256_DIGEST_SIZE],
+            voters_commitment: [2u8; SUMHASH512_DIGEST_SIZE],
+            ln_proven_weight: 1,
+            first_attested_round: first,
+            last_attested_round: last,
+        }
+    }
+
+    #[test]
+    fn block_index_first_round() {
+        assert_eq!(make_msg(100, 355).block_index_for_round(100), Some(0));
+    }
+
+    #[test]
+    fn block_index_last_round() {
+        assert_eq!(make_msg(100, 355).block_index_for_round(355), Some(255));
+    }
+
+    #[test]
+    fn block_index_out_of_interval_high() {
+        assert_eq!(make_msg(100, 355).block_index_for_round(356), None);
+    }
+
+    #[test]
+    fn block_index_before_interval() {
+        assert_eq!(make_msg(100, 355).block_index_for_round(99), None);
+    }
+
+    #[test]
+    fn block_index_underflow_safe() {
+        assert_eq!(make_msg(1, 256).block_index_for_round(0), None);
+    }
+
+    #[test]
+    fn trust_anchor_from_message() {
+        let msg = make_msg(0, 255);
+        let anchor = TrustAnchor::from(&msg);
+        assert_eq!(anchor.part_commitment, msg.voters_commitment);
+        assert_eq!(anchor.ln_proven_weight, msg.ln_proven_weight);
     }
 }

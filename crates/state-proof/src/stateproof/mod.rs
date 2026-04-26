@@ -1,10 +1,12 @@
 // crates/state-proof/src/stateproof/mod.rs
 
+mod commitment;
 mod coin;
 pub(crate) mod constants;
 mod message;
 mod verifier;
 
+pub use commitment::{LightBlockHeader, verify_block_header_commitment, verify_txn_commitment};
 pub use message::{StateProofMessage, TrustAnchor};
 pub use verifier::{VerifyError, verify_state_proof};
 

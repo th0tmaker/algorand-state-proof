@@ -99,7 +99,6 @@ pub(crate) const DOMAIN_SIG_SLOT: &[u8] = b"sps";
 pub(crate) const DOMAIN_COIN_SEED: &[u8] = b"spc";
 
 // ── Hash domains: SHA-256 ────────────────────────────────────────────────────
-// Not yet implemented — defined here as a specification reference for future work.
 
 /// **State proof message hash** — signed by participants' ephemeral Falcon keys.
 ///
@@ -107,7 +106,6 @@ pub(crate) const DOMAIN_COIN_SEED: &[u8] = b"spc";
 ///
 /// Binds the proof to a specific block interval. The 32-byte result is the
 /// `msg_hash` parameter of `verify_state_proof`.
-#[allow(dead_code)]
 pub(crate) const DOMAIN_MSG_HASH: &[u8] = b"spm";
 
 /// **Light block header VC leaf** (block headers tree, root = `blockHeadersCommitment`).
@@ -117,5 +115,16 @@ pub(crate) const DOMAIN_MSG_HASH: &[u8] = b"spm";
 /// Commits an individual block header into the SHA-256 VcTree that covers the
 /// 256 blocks in the attested interval. Verifying this tree against
 /// `blockHeadersCommitment` confirms which transactions the state proof attests to.
-#[allow(dead_code)]
 pub(crate) const DOMAIN_BLOCK_HEADER: &[u8] = b"B256";
+
+/// **Transaction leaf** — domain prefix for both transaction commitment trees.
+///
+/// Primary tree (native): `SHA-512/256("STIB" || Sig(Tx) || ApplyData)`
+/// SHA-256 tree (for cross-chain use, root = `LightBlockHeader::txn_commitment`):
+///   `SHA-256("STIB" || Sig(Tx) || ApplyData)`
+///
+/// The SHA-256 `stibhash` is returned by
+/// `GET /v2/blocks/{round}/transactions/{txid}/proof?hashtype=sha256`
+/// and passed directly to `verify_txn_commitment`.
+#[allow(dead_code)]
+pub(crate) const DOMAIN_TXN_LEAF: &[u8] = b"STIB";
