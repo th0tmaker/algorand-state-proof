@@ -1,4 +1,5 @@
 // crates/state-proof/src/lib.rs
+extern crate alloc;
 
 mod codec;
 mod stateproof;

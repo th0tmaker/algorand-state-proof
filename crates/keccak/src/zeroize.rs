@@ -1,6 +1,6 @@
 // crates/keccak/src/zeroize.rs
 
-use std::sync::atomic::{compiler_fence, Ordering};
+use core::sync::atomic::{compiler_fence, Ordering};
 
 /// In-place zeroing of secret memory.
 ///
@@ -15,7 +15,7 @@ pub trait Zeroize {
 impl Zeroize for [u8] {
     fn zeroize(&mut self) {
         for byte in self.iter_mut() {
-            unsafe { std::ptr::write_volatile(byte, 0u8) }
+            unsafe { core::ptr::write_volatile(byte, 0u8) }
         }
         compiler_fence(Ordering::SeqCst);
     }
@@ -30,7 +30,7 @@ impl<const N: usize> Zeroize for [u8; N] {
 impl Zeroize for [u64] {
     fn zeroize(&mut self) {
         for word in self.iter_mut() {
-            unsafe { std::ptr::write_volatile(word, 0u64) }
+            unsafe { core::ptr::write_volatile(word, 0u64) }
         }
         compiler_fence(Ordering::SeqCst);
     }

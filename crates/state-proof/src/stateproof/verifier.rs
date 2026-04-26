@@ -1,6 +1,7 @@
 // crates/state-proof/src/stateproof/verifier.rs
 
-use std::{collections::HashMap, fmt};
+use core::fmt;
+use alloc::collections::BTreeMap;
 
 use algorand_falcon_keys::PublicKey;
 use merkle::{hash_obj, Hashable, MerkleHasher, Sumhash512, Sumhash512Digest};
@@ -82,7 +83,7 @@ impl fmt::Display for VerifyError {
     }
 }
 
-impl std::error::Error for VerifyError {}
+impl core::error::Error for VerifyError {}
 
 // ── Leaf-hash helpers ─────────────────────────────────────────────────────────
 
@@ -224,8 +225,7 @@ fn verify_merkle_sig_scheme(
 /// ### Parameters
 /// * `state_proof` — decoded from the State Proof transaction wire bytes.
 /// * `message`     — the `StateProofMessage` from the same transaction.
-/// * `anchor`      — trusted `part_commitment` and `ln_proven_weight` from the
-///                   *previous* interval's `StateProofMessage`.
+/// * `anchor`      — trusted `part_commitment` and `ln_proven_weight` from the *previous* interval's `StateProofMessage`.
 pub fn verify_state_proof(
     state_proof: &StateProof,
     message: &StateProofMessage,
@@ -267,9 +267,9 @@ pub fn verify_state_proof(
     // ── 3. Build reveal index; reject duplicate reveal positions ─────────────
     // positions_to_reveal can contain repeated values (multiple coins landing on the
     // same heavy participant), so reveals.len() ≤ positions_to_reveal.len() is normal.
-    let reveal_map: HashMap<u64, &Reveal> =
+    let reveal_map: BTreeMap<u64, &Reveal> =
         state_proof.reveals.iter().map(|(pos, r)| (*pos, r)).collect();
-    // HashMap deduplicates by key; a smaller map means the wire data had duplicate positions.
+    // BTreeMap deduplicates by key; a smaller map means the wire data had duplicate positions.
     if reveal_map.len() != state_proof.reveals.len() {
         return Err(VerifyError::DuplicateRevealPosition);
     }

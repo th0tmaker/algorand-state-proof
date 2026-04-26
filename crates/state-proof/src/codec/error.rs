@@ -32,8 +32,8 @@ pub enum DecodeError {
     ZeroSignedWeight,
 }
 
-impl std::fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::HashTypeMismatch { expected, got } =>
                 write!(f, "hash type mismatch: expected {expected:?}, got {got:?}"),
@@ -63,4 +63,4 @@ impl std::fmt::Display for DecodeError {
     }
 }
 
-impl std::error::Error for DecodeError {}
+impl core::error::Error for DecodeError {}

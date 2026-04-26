@@ -1,5 +1,8 @@
 // crates/merkle/src/lib.rs
-use std::{collections::BTreeMap, fmt};
+extern crate alloc;
+
+use core::fmt;
+use alloc::collections::BTreeMap;
 
 use sha2::Digest as Sha2Digest;
 pub use sha2::Sha256;
@@ -103,7 +106,7 @@ pub trait Hashable {
 /// reset is a trivial swap since initialization is cheap.
 pub trait MerkleHasher: Sized {
     /// The fixed-size digest produced by this hasher.
-    type Digest: Copy + Eq + PartialEq + std::fmt::Debug + AsRef<[u8]>;
+    type Digest: Copy + Eq + PartialEq + core::fmt::Debug + AsRef<[u8]>;
 
     /// The identifier for this hasher, used to populate [HashFactory].
     const HASH_TYPE: HashType;
