@@ -9,6 +9,7 @@ use super::constants::{
     DOMAIN_EMPTY_SLOT, DOMAIN_EPHEMERAL_KEY, DOMAIN_PARTICIPANT, DOMAIN_SIG_SLOT,
     LN2_FIXED_POINT, MERKLE_SIG_SCHEME_ID, STRENGTH_TARGET, VC_PROOF_MAX_DEPTH,
 };
+use super::message::{StateProofMessage, TrustAnchor};
 use super::{
     CoinChoiceSeed, CoinGenerator, MessageHash, MerkleSignatureScheme,
     Participant, Reveal, SigSlotCommit, StateProof, ln_int_approximation,
@@ -217,19 +218,23 @@ fn verify_merkle_sig_scheme(
 
 /// Verifies a `StateProof` against trusted parameters.
 ///
+/// On success returns the `TrustAnchor` for the *next* interval, extracted from
+/// `message`. Chain calls by passing each returned anchor as the next `anchor`.
+///
 /// ### Parameters
-/// * `state_proof` — decoded from network wire bytes.
-/// * `part_commitment` — trusted root of the participants Merkle tree (from the previous state proof's message).
-/// * `ln_proven_weight` — `ceil(2^16 · ln(proven_weight))` from the previous state proof's message.
-/// * `round` — the last attested round (`lastAttestedRound` from the current state proof's message).
-/// * `msg_hash` — `SHA-256("spm" || canonical_msgpack(current_state_proof_message))`.
+/// * `state_proof` — decoded from the State Proof transaction wire bytes.
+/// * `message`     — the `StateProofMessage` from the same transaction.
+/// * `anchor`      — trusted `part_commitment` and `ln_proven_weight` from the
+///                   *previous* interval's `StateProofMessage`.
 pub fn verify_state_proof(
     state_proof: &StateProof,
-    part_commitment: &Sumhash512Digest,
-    ln_proven_weight: u64,
-    round: u64,
-    msg_hash: &MessageHash,
-) -> Result<(), VerifyError> {
+    message: &StateProofMessage,
+    anchor: &TrustAnchor,
+) -> Result<TrustAnchor, VerifyError> {
+    let part_commitment = &anchor.part_commitment;
+    let ln_proven_weight = anchor.ln_proven_weight;
+    let round = message.last_attested_round;
+    let msg_hash = message.hash();
     // ── 1. Reject trees that exceed the protocol depth limit ──────────────────
     if state_proof.sig_proofs.tree_depth > VC_PROOF_MAX_DEPTH {
         return Err(VerifyError::TreeDepthTooLarge {
@@ -294,7 +299,7 @@ pub fn verify_state_proof(
                 &reveal.participant.pk.commitment,
                 round,
                 reveal.participant.pk.key_lifetime,
-                msg_hash,
+                &msg_hash,
                 pos,
             )?;
         }
@@ -320,7 +325,7 @@ pub fn verify_state_proof(
         ln_proven_weight,
         sig_commitment: state_proof.sig_commitment,
         signed_weight: state_proof.signed_weight,
-        message_hash: *msg_hash,
+        message_hash: msg_hash,
     };
     
     let mut coins = CoinGenerator::new(&seed);
@@ -339,5 +344,5 @@ pub fn verify_state_proof(
         }
     }
 
-    Ok(())
+    Ok(TrustAnchor::from(message))
 }

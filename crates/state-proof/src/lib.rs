@@ -25,6 +25,7 @@ pub use codec::DecodeError;
 // ── State proof types and verifier ───────────────────────────────────────────
 pub use stateproof::{
     MessageHash,
+    StateProofMessage, TrustAnchor,
     MerkleVerifier, MerkleSignatureScheme,
     SigSlotCommit, Participant, Reveal,
     StateProof,

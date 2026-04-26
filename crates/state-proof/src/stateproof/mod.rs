@@ -2,8 +2,10 @@
 
 mod coin;
 pub(crate) mod constants;
+mod message;
 mod verifier;
 
+pub use message::{StateProofMessage, TrustAnchor};
 pub use verifier::{VerifyError, verify_state_proof};
 
 pub(crate) use coin::{CoinChoiceSeed, CoinGenerator, ln_int_approximation};
@@ -322,6 +324,13 @@ pub struct StateProof {
     pub positions_to_reveal: Vec<u64>,
 }
 
+impl StateProof {
+    /// Decodes a `StateProof` from Algorand canonical MessagePack wire bytes.
+    pub fn from_msgpack(bytes: &[u8]) -> Result<Self, DecodeError> {
+        StateProof::decode(bytes)
+    }
+}
+
 impl MsgPackDecode for StateProof {
     fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         let n = r.read_map_len()?;
@@ -387,11 +396,3 @@ impl MsgPackDecode for StateProof {
         })
     }
 }
-
-impl StateProof {
-    /// Decodes a `StateProof` from Algorand canonical MessagePack wire bytes.
-    pub fn from_msgpack(bytes: &[u8]) -> Result<Self, DecodeError> {
-        StateProof::decode(bytes)
-    }
-}
-

@@ -17,6 +17,7 @@ dependencies = [
  "algorand-falcon-keys",
  "keccak",
  "merkle",
+ "sha2",
 ]
 
 [[package]]

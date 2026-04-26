@@ -6,6 +6,7 @@ description = "Cryptographic attestation of Algorand's ledger state across a blo
 license = "MIT"
 
 [dependencies]
-keccak  = { path = "../keccak" }
-merkle  = { path = "../merkle" }
+keccak = { path = "../keccak" }
+merkle = { path = "../merkle" }
+sha2 = "0.11"
 algorand-falcon-keys = { git = "https://github.com/th0tmaker/algorand-falcon-keys", rev = "66cf0571e4b3d7b71252be8d5ed51e1628260de0" }

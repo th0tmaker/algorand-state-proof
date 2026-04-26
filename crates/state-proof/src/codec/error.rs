@@ -1,7 +1,5 @@
 // crates/state-proof/src/codec/error.rs
 
-use std::fmt;
-
 use merkle::HashType;
 
 
@@ -34,8 +32,8 @@ pub enum DecodeError {
     ZeroSignedWeight,
 }
 
-impl fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::HashTypeMismatch { expected, got } =>
                 write!(f, "hash type mismatch: expected {expected:?}, got {got:?}"),
