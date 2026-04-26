@@ -12,14 +12,14 @@ pub(crate) use merkle::MERKLE_VC_BOTTOM_LEAF as DOMAIN_EMPTY_SLOT;
 
 /// Maximum VC tree depth allowed for `sig_proofs` and `part_proofs` in a valid
 /// `StateProof`. Proofs with `tree_depth` exceeding this are rejected. [State Proof validity]
-pub const VC_PROOF_MAX_DEPTH: u8 = 20;
+pub(crate) const VC_PROOF_MAX_DEPTH: u8 = 20;
 
 /// Maximum tree depth for the inner ephemeral-key Merkle Signature Scheme tree.
 /// Used to compute the fixed-length proof encoding within a `MerkleSignatureScheme`.
 pub(crate) const MSS_PROOF_MAX_DEPTH: u8 = 16;
 
 /// Maximum number of reveals (and positions) permitted in a single `StateProof`.
-pub const MAX_REVEALS: usize = 640;
+pub(crate) const MAX_REVEALS: usize = 640;
 
 /// Security-strength target: `256 = k + 2q` where `(k=128, q=64)` accounts for a
 /// quantum attacker's Grover-style speedup over the hash-based components.

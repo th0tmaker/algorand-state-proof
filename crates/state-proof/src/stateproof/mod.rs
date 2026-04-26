@@ -61,7 +61,7 @@ impl MsgPackDecode for CompressedSignature {
 
 /// Identifies a participant's long-term Merkle signing key.
 ///
-/// Codec keys: `"cmt" representing the message being attest`, `"lf"`.
+/// Codec keys: `"cmt"`, `"lf"`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MerkleVerifier {
     /// `Sumhash512Digest` root commitment of the participant's ephemeral `PublicKey` tree.
