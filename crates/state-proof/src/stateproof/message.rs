@@ -127,6 +127,49 @@ impl MsgPackDecode for StateProofMessage {
 
 // ── TrustAnchor ───────────────────────────────────────────────────────────────
 
+/// Serde helper: serializes `[u8; 64]` as raw bytes and deserializes back with
+/// an exact-length check. Uses `deserialize_bytes` so binary formats can hand
+/// the data directly to the visitor without a heap allocation.
+#[cfg(feature = "serde")]
+mod bytes64 {
+    use serde::{Deserializer, Serializer, de::{Error, Visitor}};
+    use core::fmt;
+
+    pub fn serialize<S: Serializer>(val: &[u8; 64], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_bytes(val)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 64], D::Error> {
+        d.deserialize_bytes(Bytes64Visitor)
+    }
+
+    struct Bytes64Visitor;
+
+    impl<'de> Visitor<'de> for Bytes64Visitor {
+        type Value = [u8; 64];
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("exactly 64 bytes")
+        }
+
+        fn visit_bytes<E: Error>(self, v: &[u8]) -> Result<[u8; 64], E> {
+            v.try_into().map_err(|_| E::custom("expected exactly 64 bytes"))
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<[u8; 64], A::Error> {
+            let mut arr = [0u8; 64];
+            for (i, slot) in arr.iter_mut().enumerate() {
+                *slot = seq.next_element()?
+                    .ok_or_else(|| A::Error::custom(alloc::format!("expected 64 bytes, got {i}")))?;
+            }
+            if seq.next_element::<u8>()?.is_some() {
+                return Err(A::Error::custom("expected exactly 64 bytes, got more"));
+            }
+            Ok(arr)
+        }
+    }
+}
+
 /// Trusted parameters used to verify one State Proof interval, produced by
 /// verifying the *previous* interval.
 ///
@@ -134,9 +177,11 @@ impl MsgPackDecode for StateProofMessage {
 /// `StateProofMessage`. On success, `verify_state_proof` returns the next
 /// `TrustAnchor` (extracted from the current message) for the following call.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TrustAnchor {
     /// Sumhash512 root of the current interval's participants VcTree.
     /// Sourced from the *previous* `StateProofMessage::voters_commitment`.
+    #[cfg_attr(feature = "serde", serde(with = "bytes64"))]
     pub part_commitment: Sumhash512Digest,
 
     /// `ceil(2^16 · ln(proven_weight))` for the current interval.
@@ -199,5 +244,17 @@ mod tests {
         let anchor = TrustAnchor::from(&msg);
         assert_eq!(anchor.part_commitment, msg.voters_commitment);
         assert_eq!(anchor.ln_proven_weight, msg.ln_proven_weight);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn trust_anchor_serde_round_trip() {
+        let anchor = TrustAnchor {
+            part_commitment:  [0xabu8; 64],
+            ln_proven_weight: 2230322,
+        };
+        let encoded = serde_json::to_vec(&anchor).unwrap();
+        let decoded: TrustAnchor = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(anchor, decoded);
     }
 }
