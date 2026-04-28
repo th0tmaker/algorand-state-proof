@@ -85,9 +85,9 @@ impl CoinGenerator {
     /// by absorbing the serialized seed into `Shake256`.
     pub fn new(seed: &CoinChoiceSeed) -> Self {
         // Create a new instance of `Shake256`, absord the seed bytes and flip to squeeze mode.
-        let mut shake = Shake256::new();
-        shake.absorb(&seed.to_bytes());
-        shake.flip();
+        let mut xof = Shake256::new();
+        xof.absorb(&seed.to_bytes());
+        xof.flip();
 
         // Get the seed total signed weight
         let signed_weight = seed.signed_weight;
@@ -106,7 +106,7 @@ impl CoinGenerator {
         let threshold = k * signed_weight as u128;
 
         // Wrap `shake`, `signed_weight` and `threshold` into the type and return
-        Self { shake, signed_weight, threshold }
+        Self { shake: xof, signed_weight, threshold }
     }
 
     /// Returns the next coin value uniformly distributed in `[0, signed_weight)`.

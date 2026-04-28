@@ -285,14 +285,14 @@ mod tests {
     #[test]
     fn test_shake256_empty() {
         // Create a new instance of Shake256
-        let mut shake = Shake256::new();
+        let mut xof = Shake256::new();
 
         // Flip with empty message (no data to absorb).
-        shake.flip();
+        xof.flip();
 
         // Squeeze the first 32 bytes of XOF output.
         let mut out = [0u8; 32];
-        shake.squeeze(&mut out);
+        xof.squeeze(&mut out);
 
         // With an empty message the entire 136-byte block is just 0x1f at byte 0
         // and 0x80 at byte 135, zeros elsewhere. Keccak-f on that padded block
@@ -316,15 +316,15 @@ mod tests {
     #[test]
     fn test_shake256_absorb() {
         // Create a new instance of Shake256
-        let mut shake = Shake256::new();
+        let mut xof = Shake256::new();
 
         // Absorb data then flip (single byte literal 0xCC).
-        shake.absorb(&[0xCC]);
-        shake.flip();
+        xof.absorb(&[0xCC]);
+        xof.flip();
 
         // Squeeze the first 32 bytes of XOF output.
         let mut out = [0u8; 32];
-        shake.squeeze(&mut out);
+        xof.squeeze(&mut out);
 
         // A mismatch here points to a bug in absorb (bytes written to wrong
         // buf positions) or the interaction between `absorb` and `flip`.
@@ -367,15 +367,15 @@ mod tests {
         ];
 
         // Create a new instance of Shake256
-        let mut shake = Shake256::new();
+        let mut xof = Shake256::new();
 
         // Absorb data then flip (absorbing msg consumes full rate block).
-        shake.absorb(&msg);
-        shake.flip();
+        xof.absorb(&msg);
+        xof.flip();
 
         // Squeeze the first 32 bytes of XOF output.
         let mut out = [0u8; 32];
-        shake.squeeze(&mut out);
+        xof.squeeze(&mut out);
 
         // A mismatch here means process_block is faulty or was not called correctly
         // at the block boundary, or buf was not cleared properly before `finalize_xof`.
@@ -417,15 +417,15 @@ mod tests {
         ];
 
         // Create a new instance of Shake256
-        let mut shake = Shake256::new();
+        let mut xof = Shake256::new();
 
         // Absorb data then flip (absorbing msg consumes full rate block).
-        shake.absorb(&msg);
-        shake.flip();
+        xof.absorb(&msg);
+        xof.flip();
 
         // Squeeze 144 bytes of XOF output.
         let mut out = [0u8; 144];
-        shake.squeeze(&mut out);
+        xof.squeeze(&mut out);
 
         // Bytes 0–135 come from the first squeeze block; bytes 136–143 require
         // a second keccak_f. A mismatch in bytes 136+ means the squeeze boundary
@@ -493,15 +493,15 @@ mod tests {
         ];
 
         // Create a new instance of Shake256
-        let mut shake = Shake256::new();
+        let mut xof = Shake256::new();
 
         // Absorb data then flip (absorbing msg consumes full rate block).
-        shake.absorb(&msg);
-        shake.flip();
+        xof.absorb(&msg);
+        xof.flip();
 
         // Squeeze 32 bytes of XOF output.
         let mut out = [0u8; 32];
-        shake.squeeze(&mut out);
+        xof.squeeze(&mut out);
 
         // A mismatch here means absorb failed to flush at the 136-byte boundary,
         // or buf was not cleared correctly before continuing into block 2.

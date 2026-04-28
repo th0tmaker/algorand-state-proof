@@ -121,12 +121,12 @@ impl Sumhash {
         // `u=64 || n || m || seed`, where `u`, `n` and `m` are
         // little-endian `u16` to match the encoding across all
         // Algorand implementations of sumhash.
-        let mut shake = Shake256::new();
-        shake.absorb(&64u16.to_le_bytes());  // u: bits per output word
-        shake.absorb(&n.to_le_bytes());      // n: rows
-        shake.absorb(&m.to_le_bytes());      // m: columns (bits)
-        shake.absorb(seed);
-        shake.flip();
+        let mut xof = Shake256::new();
+        xof.absorb(&64u16.to_le_bytes());  // u: bits per output word
+        xof.absorb(&n.to_le_bytes());      // n: rows
+        xof.absorb(&m.to_le_bytes());      // m: columns (bits)
+        xof.absorb(seed);
+        xof.flip();
 
         // Widen to usize for allocations and arithmetic below.
         let n = n as usize;
@@ -143,7 +143,7 @@ impl Sumhash {
             let mut row = vec![[0u64; 256]; m_bytes];
             for entry in row.iter_mut().take(m_bytes) {
                 for col in cols.iter_mut() {
-                    shake.squeeze(&mut word_buf);
+                    xof.squeeze(&mut word_buf);
                     *col = u64::from_le_bytes(word_buf);
                 }
                 for (b, slot) in entry.iter_mut().enumerate() {
