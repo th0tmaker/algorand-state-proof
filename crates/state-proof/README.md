@@ -31,11 +31,11 @@ On success, `verify_state_proof` returns the next `TrustAnchor`, which is passed
 The full verification chain this crate enables:
 
 ```
-verify_state_proof()                      → next TrustAnchor
+verify_state_proof()                         → next TrustAnchor
   └─ message.block_headers_commitment
-       └─ verify_block_header_commitment() → proves a specific block is in the interval
+       └─ verify_block_header_commitment()   → proves a specific block is in the interval
             └─ header.txn_commitment
-                 └─ verify_txn_commitment()→ proves a specific transaction is in the block
+                 └─ verify_txn_commitment()  → proves a specific transaction is in the block
 ```
 
 ## Core API
