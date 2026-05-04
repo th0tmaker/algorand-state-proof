@@ -117,9 +117,6 @@ fn verify_mainnet_state_proof() {
     let next_anchor = verify_state_proof(&sp, &message, &anchor)
         .expect("verification failed");
 
-    println!("Anchor {:?}", anchor);
-    println!("Next Anchor {:?}", next_anchor);
-
     // The returned anchor carries the trust parameters for the next interval.
     assert_eq!(next_anchor.part_commitment,  SP_MSG_VOTERS_COMMITMENT);
     assert_eq!(next_anchor.ln_proven_weight, SP_MSG_LN_PROVEN_WEIGHT);
