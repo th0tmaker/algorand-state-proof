@@ -1,6 +1,6 @@
 # algorand-state-proof
 
-A Rust implementation of Algorand's State Proof functionality. State proofs, or compact certificates of collective knowledge, are cryptographic proofs of Algorand's ledger state and recent transaction history, produced when a sufficient amount of the network's online stake co-signs them. This allows any external party to verify Algorand's ledger state without having to run a node directly.
+A Rust implementation of Algorand's State Proof functionality. State proofs, or compact certificates of collective knowledge, are cryptographic proofs of Algorand's ledger state and recent transaction history, produced by aggregating a pseudo-random sample of independent signatures from a sufficient threshold of the network's online stake. This allows any external party to verify Algorand's ledger state without having to run a node directly.
 
 State proofs achieve this using post-quantum cryptography — Falcon-1024 signatures committed over a Sumhash512 Merkle tree — making trustless, lightweight verification of the Algorand ledger possible from anywhere.
 
