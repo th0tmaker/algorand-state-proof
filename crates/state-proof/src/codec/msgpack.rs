@@ -1,10 +1,4 @@
 // crates/state-proof/src/codec/msgpack.rs
-//
-// The encode side (write helpers, Value, AlgorandMessagePack, MsgPackEncode) is
-// implemented but only partially exercised today — the decode path drives all
-// current call sites. The module-level allow suppresses those "unused" warnings
-// without scattering attributes across every item.
-#![allow(unused)]
 
 use super::DecodeError;
 
@@ -87,6 +81,7 @@ fn write_array_header(out: &mut Vec<u8>, n: usize) {
 
 // Typed storage for `AlgorandMessagePack` entries. Data is held in its native
 // form and serialized only when `encode_into()` is called on the containing map.
+#[allow(dead_code)]
 enum Value {
     /// Unsigned integer value.
     Uint(u64),
@@ -138,6 +133,7 @@ impl AlgorandMessagePack {
     }
 
     /// Appends an array-of-binaries field; omitted if `elems` is empty.
+    #[allow(dead_code)]
     pub(crate) fn bytes_array(mut self, key: &'static str, elems: &[impl AsRef<[u8]>]) -> Self {
         if !elems.is_empty() {
             let raw: Vec<Vec<u8>> = elems.iter().map(|i| i.as_ref().to_vec()).collect();
@@ -147,6 +143,7 @@ impl AlgorandMessagePack {
     }
 
     /// Appends an array-of-u64 field; omitted if `elems` is empty.
+    #[allow(dead_code)]
     pub(crate) fn uint_array(mut self, key: &'static str, elems: &[u64]) -> Self {
         if !elems.is_empty() {
             self.entries.push((key, Value::UintArray(elems.to_vec())));
@@ -155,6 +152,7 @@ impl AlgorandMessagePack {
     }
 
     /// Appends an integer-keyed map field; omitted if `entries` is empty.
+    #[allow(dead_code)]
     pub(crate) fn uint_keyed_map(mut self, key: &'static str, entries: Vec<(u64, AlgorandMessagePack)>) -> Self {
         if !entries.is_empty() {
             self.entries.push((key, Value::UintKeyedMap(entries)));
@@ -163,6 +161,7 @@ impl AlgorandMessagePack {
     }
 
     /// Appends a nested map field; omitted if the inner map has no entries.
+    #[allow(dead_code)]
     pub(crate) fn map(mut self, key: &'static str, inner: AlgorandMessagePack) -> Self {
         if !inner.entries.is_empty() {
             self.entries.push((key, Value::Map(inner)));
@@ -211,6 +210,7 @@ impl AlgorandMessagePack {
 // ── MsgPackEncode ─────────────────────────────────────────────────────────────
 
 /// Types that can be encoded as a canonical MessagePack map.
+#[allow(dead_code)]
 pub(crate) trait MsgPackEncode {
     /// Converts into an intermediate `AlgorandMessagePack` type.
     fn to_msgpack(&self) -> AlgorandMessagePack;
