@@ -1,11 +1,11 @@
 // crates/state-proof/src/lib.rs
 
-//! Post-quantum Algorand state proof verifier.
+//! Lightweight, trustless verification of the Algorand ledger without running a full node.
 //!
-//! Verifies Algorand state proofs, enabling lightweight trustless verification
-//! of the Algorand ledger without running a full node. State proofs use
-//! Falcon-1024 signatures over a Sumhash512 Merkle commitment, providing
-//! quantum-secure attestation over a 256-round block interval.
+//! An Algorand state proof is a post-quantum attestation that covers a 256-round block
+//! interval. It is built from Falcon-1024 ephemeral signatures over a Sumhash512 Merkle
+//! commitment, giving quantum-secure proof that a threshold of online stake signed the
+//! attested message.
 //!
 //! ## Verification workflow
 //!

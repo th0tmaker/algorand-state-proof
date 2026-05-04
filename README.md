@@ -1,6 +1,8 @@
 # algorand-state-proof
 
-Post-quantum verifier for Algorand State Proofs, implemented in Rust. The workspace is organised as a stack of focused crates: [`keccak`](crates/keccak/) provides the SHAKE-256 extendable-output function used for coin generation, [`sumhash`](crates/sumhash/) implements Algorand's Sumhash512 post-quantum hash function, [`merkle`](crates/merkle/) builds generic Merkle and Vector Commitment trees over either hash, and [`state-proof`](crates/state-proof/) ties them together into a complete decoder and verifier for Algorand State Proofs — enabling trustless, lightweight verification of Algorand's ledger state without running a full node.
+A Rust implementation of the Algorand State Proof verifier. State proofs let a light client verify Algorand's ledger state without running a full node, using post-quantum cryptography (Falcon-1024 signatures over a Sumhash512 Merkle commitment).
+
+The workspace is a stack of focused crates, each independently usable but designed to compose: [`keccak`](crates/keccak/), [`sumhash`](crates/sumhash/), and [`merkle`](crates/merkle/) provide the cryptographic primitives; [`state-proof`](crates/state-proof/) ties them into the complete decoder and verifier.
 
 ## Disclaimer
 
