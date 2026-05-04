@@ -50,4 +50,4 @@ cargo test
 
 ## License
 
-MIT
+[MIT](../../LICENSE)

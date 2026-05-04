@@ -54,4 +54,4 @@ Requires a C compiler (GCC, Clang, or MSVC) for the vendored Falcon-1024 C libra
 
 ## License
 
-MIT
+[MIT](LICENSE)
