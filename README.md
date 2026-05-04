@@ -1,10 +1,15 @@
 # algorand-state-proof
 
-A Rust implementation of Algorand's State Proof functionality. State proofs, or compact certificates of collective knowledge, are cryptographic proofs of Algorand's ledger state and recent transaction history, produced by aggregating a pseudo-random sample of independent signatures from a sufficient threshold of the network's online stake. This allows any external party to verify Algorand's ledger state without having to run a node directly.
+A Rust implementation of **Algorand State Proof** verification. State proofs — also known as *compact certificates of collective knowledge* — use quantum-secure cryptography to prove Algorand's ledger state and transaction history across fixed intervals of **256 consecutive block rounds**. Each proof is produced natively by the Algorand network: online participants independently sign the interval's attested message with ephemeral keys, and a **pseudo-random, stake-weighted sampling process** selects a subset of those signatures until their combined stake weight provably exceeds a predetermined threshold that can act as the
+supermajority stake. Each selected signature is accompanied by a Merkle membership proof authenticating it against a committed participant set, ensuring no signature can be fabricated or substituted.
 
-State proofs achieve this using post-quantum cryptography — Falcon-1024 signatures committed over a Sumhash512 Merkle tree — making trustless, lightweight verification of the Algorand ledger possible from anywhere.
+Crucially, each state proof also carries the **trust parameters for the next interval** — the participant commitment and proven weight — forming a *chain of trust* where every verified proof yields the anchor needed to verify the one that follows. A single trusted starting point is all that is required to then verify an unbroken sequence of proofs covering any span of Algorand's history.
 
-The workspace is a stack of focused crates, each independently usable but designed to compose: [`keccak`](crates/keccak/), [`sumhash`](crates/sumhash/), and [`merkle`](crates/merkle/) provide the cryptographic primitives; [`state-proof`](crates/state-proof/) ties them into the complete decoder and verifier.
+This design allows any external party to verify Algorand's consensus **without running a node**, consuming only a compact proof and a trusted anchor, making state proofs the foundation for light clients, cross-chain bridges, and zkVM-based verification pipelines.
+
+The post-quantum security of state proofs comes from two primitives: **Falcon-1024** (a lattice-based signature scheme) for individual participant signatures, and **Sumhash512** (a hash function based on integer linear algebra over a random matrix) for the Merkle commitment trees that bind those signatures together.
+
+The workspace is organized as a stack of focused, composable crates — [`keccak`](crates/keccak/), [`sumhash`](crates/sumhash/), and [`merkle`](crates/merkle/) provide the cryptographic building blocks, while [`state-proof`](crates/state-proof/) integrates them into a complete decoding and verification pipeline.
 
 ## Disclaimer
 
