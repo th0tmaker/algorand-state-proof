@@ -239,6 +239,14 @@ mod tests {
     }
 
     #[test]
+    fn msgpack_roundtrip() {
+        let original = make_msg(59_999_745, 60_000_000);
+        let bytes = original.to_msgpack_bytes();
+        let decoded = StateProofMessage::from_msgpack(&bytes).expect("decode failed");
+        assert_eq!(original, decoded);
+    }
+
+    #[test]
     fn trust_anchor_from_message() {
         let msg = make_msg(0, 255);
         let anchor = TrustAnchor::from(&msg);

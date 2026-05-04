@@ -1,4 +1,35 @@
 // crates/state-proof/src/lib.rs
+
+//! Post-quantum Algorand state proof verifier.
+//!
+//! Verifies Algorand state proofs, enabling lightweight trustless verification
+//! of the Algorand ledger without running a full node. State proofs use
+//! Falcon-1024 signatures over a Sumhash512 Merkle commitment, providing
+//! quantum-secure attestation over a 256-round block interval.
+//!
+//! ## Verification workflow
+//!
+//! Each State Proof transaction carries two fields:
+//! - `sp` — the [`StateProof`] (the cryptographic proof)
+//! - `spmsg` — the [`StateProofMessage`] (what was attested to)
+//!
+//! To verify a proof you also need a [`TrustAnchor`] sourced from the
+//! *previous* interval's [`StateProofMessage`] — this is what makes the
+//! proofs chain from genesis.
+//!
+//! ```no_run
+//! use algorand_state_proof::{StateProof, StateProofMessage, TrustAnchor, verify_state_proof};
+//!
+//! fn verify(sp_bytes: &[u8], msg_bytes: &[u8], anchor: &TrustAnchor)
+//!     -> Result<TrustAnchor, algorand_state_proof::VerifyError>
+//! {
+//!     let sp  = StateProof::from_msgpack(sp_bytes).unwrap();
+//!     let msg = StateProofMessage::from_msgpack(msg_bytes).unwrap();
+//!     // Returns the anchor for the *next* interval on success.
+//!     verify_state_proof(&sp, &msg, anchor)
+//! }
+//! ```
+
 extern crate alloc;
 
 mod codec;
