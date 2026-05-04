@@ -12,7 +12,7 @@
 //   ln_proven_weight:  2230322
 //   voters_commitment: Yqhs72l9VsNRRfXTDe5ZRmRnsTYP9fm0rp5kywwt8y9Ul39tNa1abC7ceX3+Hy3XnxZogVGzYRZsBMJCvpwTWQ==
 
-use algorand_state_proof::{StateProof, StateProofMessage, TrustAnchor, verify_state_proof};
+use algorand_state_proof::{DecodeError, StateProof, StateProofMessage, TrustAnchor, VerifyError, verify_state_proof};
 
 const SP_FIRST_RND:  u64 = 59999745;
 const SP_LATEST_RND: u64 = 60000000;
@@ -123,4 +123,82 @@ fn verify_mainnet_state_proof() {
     // The returned anchor carries the trust parameters for the next interval.
     assert_eq!(next_anchor.part_commitment,  SP_MSG_VOTERS_COMMITMENT);
     assert_eq!(next_anchor.ln_proven_weight, SP_MSG_LN_PROVEN_WEIGHT);
+}
+
+// ── Verifier error paths (fixture-based) ──────────────────────────────────────
+
+#[test]
+fn sig_proof_failed() {
+    let mut sp = StateProof::from_msgpack(FIXTURE).expect("decode failed");
+    sp.sig_commitment[0] ^= 0xff;
+    assert_eq!(
+        verify_state_proof(&sp, &make_message(), &make_anchor()),
+        Err(VerifyError::SigProofFailed)
+    );
+}
+
+#[test]
+fn part_proof_failed() {
+    let sp = StateProof::from_msgpack(FIXTURE).expect("decode failed");
+    let bad_anchor = TrustAnchor { part_commitment: [0xffu8; 64], ln_proven_weight: PREV_SP_LN_PROVEN_WEIGHT };
+    assert_eq!(
+        verify_state_proof(&sp, &make_message(), &bad_anchor),
+        Err(VerifyError::PartProofFailed)
+    );
+}
+
+#[test]
+fn falcon_verify_failed() {
+    let sp = StateProof::from_msgpack(FIXTURE).expect("decode failed");
+    let mut bad_msg = make_message();
+    bad_msg.block_headers_commitment[0] ^= 0xff;
+    assert!(matches!(
+        verify_state_proof(&sp, &bad_msg, &make_anchor()),
+        Err(VerifyError::FalconVerifyFailed { .. })
+    ));
+}
+
+#[test]
+fn salt_version_mismatch() {
+    let mut sp = StateProof::from_msgpack(FIXTURE).expect("decode failed");
+    // All reveals have salt_version=0; declaring version=1 causes a mismatch.
+    sp.mss_salt_version = 1;
+    assert!(matches!(
+        verify_state_proof(&sp, &make_message(), &make_anchor()),
+        Err(VerifyError::SaltVersionMismatch { .. })
+    ));
+}
+
+#[test]
+fn vc_proof_failed() {
+    let mut sp = StateProof::from_msgpack(FIXTURE).expect("decode failed");
+    // Corrupt one node in the first reveal's inner ephemeral-key VC proof path.
+    if let Some((_, reveal)) = sp.reveals.first_mut() {
+        if let Some(node) = reveal.sig_slot.mss.proof.path.first_mut() {
+            node[0] ^= 0xff;
+        }
+    }
+    assert!(matches!(
+        verify_state_proof(&sp, &make_message(), &make_anchor()),
+        Err(VerifyError::VcProofFailed { .. })
+    ));
+}
+
+// ── Decoder error paths ───────────────────────────────────────────────────────
+
+#[test]
+fn decode_rejects_zero_signed_weight() {
+    // fixmap(1): {"w": 0}  — explicitly encoding w=0 triggers the check.
+    let bytes = [0x81u8, 0xa1, 0x77, 0x00];
+    assert_eq!(StateProof::from_msgpack(&bytes), Err(DecodeError::ZeroSignedWeight));
+}
+
+#[test]
+fn decode_rejects_too_many_reveals() {
+    // fixmap(1): {"r": map16(641)} — 641 > MAX_REVEALS=640.
+    let bytes = [0x81u8, 0xa1, 0x72, 0xde, 0x02, 0x81];
+    assert_eq!(
+        StateProof::from_msgpack(&bytes),
+        Err(DecodeError::TooManyReveals { got: 641, max: 640 })
+    );
 }

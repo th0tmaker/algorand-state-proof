@@ -519,10 +519,10 @@ mod tests {
         let elems: &[&[u8]] = &[&[0x01], &[0x02, 0x03]];
         let out = AlgorandMessagePack::new().bytes_array("p", elems).encode();
         assert_eq!(out, vec![
-            0x81,               // fixmap(1)
-            0xa1, b'p',         // fixstr "p"
-            0x92,               // fixarray(2)
-            0xc4, 0x01, 0x01,   // bin8, len=1, data
+            0x81,                   // fixmap(1)
+            0xa1, b'p',             // fixstr "p"
+            0x92,                   // fixarray(2)
+            0xc4, 0x01, 0x01,       // bin8, len=1, data
             0xc4, 0x02, 0x02, 0x03, // bin8, len=2, data
         ]);
     }

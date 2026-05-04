@@ -92,10 +92,7 @@ mod tests {
     use super::*;
     use crate::codec::MsgPackEncode;
 
-    /// KAT using golden MsgPack bytes produced by Python algosdk.encoding.msgpack_encode.
-    ///
-    /// Proof: TreeDepth=5, HashType=1 (Sumhash), 12-entry path from
-    /// go-stateproof-verification stateProof.json SigProofs field.
+    /// KAT using golden MsgPack bytes produced by Python `algosdk.encoding.msgpack_encode`.
     ///
     /// Verifies: decode recovers correct fields, re-encode is byte-for-byte identical.
     #[test]

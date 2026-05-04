@@ -346,3 +346,107 @@ pub fn verify_state_proof(
 
     Ok(TrustAnchor::from(message))
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::{verify_state_proof, VerifyError};
+    use crate::stateproof::{Reveal, StateProof};
+    use crate::stateproof::message::{StateProofMessage, TrustAnchor};
+    use merkle::{Proof, Sumhash512, SUMHASH512_DIGEST_SIZE};
+    extern crate std;
+
+    fn dummy_msg() -> StateProofMessage {
+        StateProofMessage {
+            block_headers_commitment: [0u8; 32],
+            voters_commitment: [0u8; 64],
+            ln_proven_weight: 0,
+            first_attested_round: 0,
+            last_attested_round: 1,
+        }
+    }
+
+    fn dummy_anchor(ln_proven_weight: u64) -> TrustAnchor {
+        TrustAnchor { part_commitment: [0u8; 64], ln_proven_weight }
+    }
+
+    /// A `StateProof` with no reveals and depth-0 empty-path proofs.
+    /// Batch VC verification over an empty element set with an empty path always
+    /// succeeds, so this passes steps 1–6 and reaches step 7 (coin loop).
+    fn hollow(signed_weight: u64, n_positions: usize) -> StateProof {
+        StateProof {
+            sig_commitment: [0u8; SUMHASH512_DIGEST_SIZE],
+            signed_weight,
+            sig_proofs: Proof::<Sumhash512>::new(0, vec![]),
+            part_proofs: Proof::<Sumhash512>::new(0, vec![]),
+            mss_salt_version: 0,
+            reveals: vec![],
+            positions_to_reveal: (0..n_positions as u64).collect(),
+        }
+    }
+
+    #[test]
+    fn tree_depth_too_large_sig_proofs() {
+        let mut sp = hollow(1_000_000, 0);
+        sp.sig_proofs = Proof::<Sumhash512>::new(21, vec![]);
+        assert_eq!(
+            verify_state_proof(&sp, &dummy_msg(), &dummy_anchor(0)),
+            Err(VerifyError::TreeDepthTooLarge { field: "sig_proofs", depth: 21 })
+        );
+    }
+
+    #[test]
+    fn tree_depth_too_large_part_proofs() {
+        let mut sp = hollow(1_000_000, 0);
+        sp.part_proofs = Proof::<Sumhash512>::new(21, vec![]);
+        assert_eq!(
+            verify_state_proof(&sp, &dummy_msg(), &dummy_anchor(0)),
+            Err(VerifyError::TreeDepthTooLarge { field: "part_proofs", depth: 21 })
+        );
+    }
+
+    #[test]
+    fn signed_weight_too_low() {
+        // ln_int_approximation(1) = Some(0), anchor.ln_proven_weight = 0 → 0 ≤ 0.
+        let sp = hollow(1, 0);
+        assert_eq!(
+            verify_state_proof(&sp, &dummy_msg(), &dummy_anchor(0)),
+            Err(VerifyError::SignedWeightTooLow)
+        );
+    }
+
+    #[test]
+    fn insufficient_reveals() {
+        // signed_weight=2 → ln_signed=45427, ln_proven_weight=0, denom=45427.
+        // 1 position: 1 × 45427 = 45427 < 256 × 45427 = 11,629,312.
+        let sp = hollow(2, 1);
+        assert_eq!(
+            verify_state_proof(&sp, &dummy_msg(), &dummy_anchor(0)),
+            Err(VerifyError::InsufficientReveals)
+        );
+    }
+
+    #[test]
+    fn duplicate_reveal_position() {
+        let mut sp = hollow(u64::MAX, 5);
+        // Two reveals keyed to the same position → BTreeMap deduplicates → size mismatch.
+        sp.reveals = vec![(0, Reveal::default()), (0, Reveal::default())];
+        assert_eq!(
+            verify_state_proof(&sp, &dummy_msg(), &dummy_anchor(0)),
+            Err(VerifyError::DuplicateRevealPosition)
+        );
+    }
+
+    #[test]
+    fn missing_reveal() {
+        // 5 positions with u64::MAX weight passes the strength check.
+        // No reveals → batch VC over empty set succeeds → coin loop hits
+        // position 0 with no matching reveal entry.
+        let sp = hollow(u64::MAX, 5);
+        assert_eq!(
+            verify_state_proof(&sp, &dummy_msg(), &dummy_anchor(0)),
+            Err(VerifyError::MissingReveal { position: 0 })
+        );
+    }
+}
