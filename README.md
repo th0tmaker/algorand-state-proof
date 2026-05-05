@@ -1,6 +1,6 @@
 # algorand-state-proof
 
-This repository is a Rust implementation of **Algorand's State Proof** functionality. State Proofs — also known as Compact Certificates — use quantum-resilient cryptography to attest to Algorand's block history across a fixed State Proof Interval of **256** rounds. Each State Proof is produced natively by the Algorand network: online participating accounts independently sign the interval's attested message using ephemeral keys managed by a Merkle Signature Scheme, and a **pseudo-random, stake-weighted sampling process** selects a subset of those signatures whose combined weight provably exceeds a predetermined ProvenWeight threshold (defined as `TotalWeight × f_SP / 2^32`, approximately 30% of the top-N online accounts' stake).
+This repository is a Rust implementation of **Algorand's State Proof** functionality. State Proofs — also known as *Compact Certificates Of Collective Knowledge* — use quantum-resilient cryptography to attest to Algorand's block history across a fixed State Proof Interval of **256** rounds. Each State Proof is produced natively by the Algorand network: online participating accounts independently sign the interval's attested message using ephemeral keys managed by a Merkle Signature Scheme, and a **pseudo-random, stake-weighted sampling process** selects a subset of those signatures whose combined weight provably exceeds a predetermined ProvenWeight threshold (defined as `TotalWeight × f_SP / 2^32`, approximately 30% of the top-N online accounts' stake).
 
 Each selected signature is accompanied by a **Vector Commitment (Merkle) membership proof** authenticating it against a committed participant array, ensuring signatures can be verified without trusting the prover.
 
@@ -8,7 +8,7 @@ Each State Proof message also carries forward a participant commitment and a `ln
 
 This design allows any external party — including light clients and cross-chain bridges — to verify Algorand's consensus **without running a full node**, consuming only a compact proof and a trusted anchor.
 
-Post-quantum security is grounded in two Algorand-specific cryptographic primitives: a deterministic variant of the **FALCON** lattice-based signature scheme (quantum-resilient and SNARK-friendly) for individual participant signatures, and **Sumhash512** (a subset-sum hash function) for the Vector Commitment trees that bind those signatures to the committed participant set.
+Post-quantum security is grounded in two Algorand-specific cryptographic primitives: a deterministic variant of the **FALCON** lattice-based signature scheme (quantum-resilient) for individual participant signatures, and **Sumhash512** (a subset-sum hash function) for the Vector Commitment trees that bind those signatures to the committed participant set.
 
 The workspace is organized as a stack of focused, composable crates — [`keccak`](crates/keccak/), [`sumhash`](crates/sumhash/), and [`merkle`](crates/merkle/) provide the cryptographic building blocks, while [`state-proof`](crates/state-proof/) integrates them into a complete decoding and verification pipeline.
 
