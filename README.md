@@ -1,6 +1,10 @@
 # algorand-state-proof
 
-A Rust implementation of **Algorand's State Proof** infrastructure. This repository enables any external party — including light clients and cross-chain bridges — to verify Algorand's ledger state and transaction history **without running a full node**, consuming only a compact proof and a trusted anchor. It covers the full verification chain: confirming a state proof is cryptographically valid, checking if a given block exists within its attested interval (range of 256 rounds), and whether a given transaction exists within that block.
+A Rust implementation of **Algorand's State Proof** infrastructure. This repository enables any external party — including light clients and cross-chain bridges — to verify Algorand's ledger state and transaction history **without running a full node**, consuming only a compact proof and a trusted anchor. It covers the full verification chain:
+
+* Whether a given state proof is cryptographically valid.
+* Whether a given block exists within the attested state proof interval (range of 256 rounds).
+* Whether a given transaction exists within a block.
 
 State Proofs — also known as *Compact Certificates Of Collective Knowledge* — use quantum-resilient cryptography to attest to Algorand's block history across a fixed State Proof Interval of **256** rounds. Each State Proof is produced natively by the Algorand network: online participating accounts independently sign the interval's attested message using ephemeral keys managed by a Merkle Signature Scheme, and a **pseudo-random, stake-weighted sampling process** selects a subset of those signatures whose combined weight provably exceeds a predetermined ProvenWeight threshold (defined as `TotalWeight × f_SP / 2^32`, approximately 30% of the top-N online accounts' stake).
 
