@@ -5,30 +5,17 @@ pub use zeroize::Zeroize;
 
 use core::fmt;
 
-
-// ── Shake256 internals ────────────────────────────────────────────────────────
-
-/// Number of u64 lanes in the Keccak-f\[1600\] state (1600 bits / 64 = 25).
-const SHAKE256_STATE_WORDS: usize = 25;
-/// Bytes absorbed or squeezed per permutation call (1600 − 2×256 = 1088 bits = 136 bytes).
-const SHAKE256_RATE: usize = 136;
-
 // ── Keccak-f\[1600\] internals ──────────────────────────────────────────────────
-//
-/// The `RHO` table. Fixed per-lane bit-rotation offsets used in the ρ step. Defined by the
-/// Keccak spec to maximise diffusion and break symmetry across all 24 rounds.
-const RHO: [[u32; 5]; 5] = [
-    [ 0, 36,  3, 41, 18],
-    [ 1, 44, 10, 45,  2],
-    [62,  6, 43, 15, 61],
-    [28, 55, 25, 21, 56],
-    [27, 20, 39,  8, 14],
-];
+
+/// Number of rounds in one Keccak-f\[1600\] permutation. Fixed by the Keccak spec.
+const KECCAK_ROUNDS: usize = 24;
+/// Side length of the 5×5 lane grid that forms the Keccak-f\[1600\] state.
+const KECCAK_DIM: usize = 5;
 
 /// Round constants XOR'd into lane (0,0) during the ι step. One per round,
 /// derived from a maximal-length LFSR. They break round-to-round symmetry,
 /// preventing the permutation from being trivially invertible.
-const RC: [u64; 24] = [
+const RC: [u64; KECCAK_ROUNDS] = [
     0x0000000000000001, 0x0000000000008082, 0x800000000000808a,
     0x8000000080008000, 0x000000000000808b, 0x0000000080000001,
     0x8000000080008081, 0x8000000000008009, 0x000000000000008a,
@@ -39,15 +26,32 @@ const RC: [u64; 24] = [
     0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
 ];
 
+/// Per-lane bit-rotation offsets for the ρ step, laid out as a `KECCAK_DIM × KECCAK_DIM` grid
+/// that mirrors the Keccak state. Each lane is addressed by coordinates `(x, y)`, so
+/// `RHO[x][y]` gives the rotation count for `state[x + KECCAK_DIM * y]`.
+const RHO: [[u32; KECCAK_DIM]; KECCAK_DIM] = [
+    [ 0, 36,  3, 41, 18],
+    [ 1, 44, 10, 45,  2],
+    [62,  6, 43, 15, 61],
+    [28, 55, 25, 21, 56],
+    [27, 20, 39,  8, 14],
+];
+
+// ── Shake256 internals ────────────────────────────────────────────────────────
+
+/// Number of u64 lanes in the Keccak-f\[1600\] state (`KECCAK_DIM × KECCAK_DIM` = 25, each 64 bits, totalling 1600 bits).
+const SHAKE256_STATE_LANES: usize = KECCAK_DIM * KECCAK_DIM;
+/// Bytes absorbed or squeezed per permutation call (1600 − 2×256 = 1088 bits = 136 bytes).
+const SHAKE256_RATE: usize = 136;
+
 /// Applies the Keccak-f\[1600\] permutation to `state` in-place.
 ///
-/// Runs 24 rounds of the five-step sequence θ, ρ, π, χ, ι over a 25-word/lane
-/// (1600-bit) state. This is the core primitive underlying SHAKE256 and SHA-3.
-pub (crate) fn keccak_f(state: &mut [u64; SHAKE256_STATE_WORDS]) {
-    // Iterate over the round constants one value at a time. 
-    for &rc in RC.iter() {
+/// Runs 24 rounds of the five-step sequence `θ`, `ρ`, `π`, `χ`, `ι` over a 25-lane
+/// (1600-bit) state. This is the core primitive underlying `SHAKE256` and `SHA-3`.
+pub(crate) fn keccak_f(state: &mut [u64; SHAKE256_STATE_LANES]) {
+    for rc in RC {
         // Step 1: θ — column parity mixing:
-        // C[x] = XOR of all words/lanes in column x.
+        // C[x] = XOR of all lanes in column x.
         let c = [
             state[0] ^ state[5] ^ state[10] ^ state[15] ^ state[20],
             state[1] ^ state[6] ^ state[11] ^ state[16] ^ state[21],
@@ -65,31 +69,31 @@ pub (crate) fn keccak_f(state: &mut [u64; SHAKE256_STATE_WORDS]) {
             c[3] ^ c[0].rotate_left(1),
         ];
 
-        // Each word/lane is XOR'd with D[x] for its column x.
-        for y in 0..5 {
-            for x in 0..5 {
-                state[x + 5 * y] ^= d[x];
+        // Each lane is XOR'd with D[x] for its column x.
+        for y in 0..KECCAK_DIM {
+            for x in 0..KECCAK_DIM {
+                state[x + KECCAK_DIM * y] ^= d[x];
             }
         }
-        /* Step 2 & 3: ρ — bit rotation inside each word/lane,
+        /* Step 2 & 3: ρ — bit rotation inside each lane,
         π — lane permutation to compute new position.
-        
+
         ρ rotates each lane by a fixed offset RHO[x][y].
-        π permutes lanes to new positions: old (x,y) → new (y, (2x+3y) mod 5).
+        π permutes lanes to new positions: old (x,y) → new (y, (2x+3y) mod KECCAK_DIM).
         Both are linear so they can be merged: rotate first, then write to
         the new position in the temporary array b. */
-        let mut b = [0u64; 25];
-        for y in 0..5 {
-            for x in 0..5 {
-                b[y + 5 * ((2 * x + 3 * y) % 5)] = state[x + 5 * y].rotate_left(RHO[x][y]);
+        let mut b = [0u64; SHAKE256_STATE_LANES];
+        for y in 0..KECCAK_DIM {
+            for x in 0..KECCAK_DIM {
+                b[y + KECCAK_DIM * ((2 * x + 3 * y) % KECCAK_DIM)] = state[x + KECCAK_DIM * y].rotate_left(RHO[x][y]);
             }
         }
 
         // Step 4: χ — the only non-linear phase.
-        // A'[x,y] = B[x,y] XOR ((NOT B[x+1,y]) AND B[x+2,y]), x indices mod 5.
-        for y in 0..5 {
-            for x in 0..5 {
-                state[x + 5 * y] = b[x + 5 * y] ^ ((!b[(x + 1) % 5 + 5 * y]) & b[(x + 2) % 5 + 5 * y]);
+        // A'[x,y] = B[x,y] XOR ((NOT B[x+1,y]) AND B[x+2,y]), x indices mod KECCAK_DIM.
+        for y in 0..KECCAK_DIM {
+            for x in 0..KECCAK_DIM {
+                state[x + KECCAK_DIM * y] = b[x + KECCAK_DIM * y] ^ ((!b[(x + 1) % KECCAK_DIM + KECCAK_DIM * y]) & b[(x + 2) % KECCAK_DIM + KECCAK_DIM * y]);
             }
         }
 
@@ -98,15 +102,15 @@ pub (crate) fn keccak_f(state: &mut [u64; SHAKE256_STATE_WORDS]) {
     }
 }
 
-/// SHAKE256 sponge state for streaming absorb and arbitrary-length squeeze.
+/// `SHAKE-256` sponge state for streaming absorb and arbitrary-length squeeze.
 ///
 /// Wraps a 1600-bit Keccak-f\[1600\] permutation state with a rate-sized input
 /// buffer. Input is absorbed in 136-byte blocks; after `flip()`, output
 /// bytes are squeezed from the same state one block at a time.
 #[derive(Clone, Eq, PartialEq)]
 pub struct Shake256 {
-    /// The 1600-bit (200-byte) Keccak-f\[1600\] permutation state, stored as 25 × u64 words/lanes.
-    state: [u64; SHAKE256_STATE_WORDS],
+    /// The 1600-bit (200-byte) Keccak-f\[1600\] permutation state, stored as 25 × u64 lanes.
+    state: [u64; SHAKE256_STATE_LANES],
     /// Input buffer accumulating bytes until a full 136-byte block is ready.
     buf: [u8; SHAKE256_RATE],
     /// Byte offset into the current block. During absorb: bytes written into `buf`.
@@ -138,21 +142,21 @@ impl Shake256 {
     /// Returns a zeroed sponge ready to absorb input.
     pub fn new() -> Self {
         Self {
-            state: [0u64; SHAKE256_STATE_WORDS],
+            state: [0u64; SHAKE256_STATE_LANES],
             buf: [0u8; SHAKE256_RATE],
             pos: 0,
             squeezing: false,
         }
     }
 
-    /// XORs `self.buf` into the first 17 words/lanes of the state as little-endian
+    /// XORs `self.buf` into the first 17 lanes of the state as little-endian
     /// `u64`s, then applies the Keccak-f\[1600\] permutation in-place.
     fn process_block(&mut self) {
-        // XOR the 136-byte buffer into the first 17 words of the state
+        // XOR the 136-byte buffer into the first 17 lanes of the state
         // (136 / 8 = 17), interpreting each 8-byte chunk as a little-endian u64.
         for i in 0..(SHAKE256_RATE / 8) {
-            let word = u64::from_le_bytes(self.buf[8 * i..8 * (i + 1)].try_into().unwrap());
-            self.state[i] ^= word;
+            let lane = u64::from_le_bytes(self.buf[8 * i..8 * (i + 1)].try_into().unwrap());
+            self.state[i] ^= lane;
         }
 
         // Apply the Keccak-f\[1600\] permutation in-place
@@ -223,7 +227,7 @@ impl Shake256 {
 
     /// Squeezes `out.len()` bytes from the sponge state into `out`.
     ///
-    /// Reads bytes from the state in little-endian lane order, applying another
+    /// Reads bytes from the state in little-endian word order, applying another
     /// Keccak-f\[1600\] permutation each time a 136-byte output block is exhausted.
     ///
     /// # Panics
@@ -245,13 +249,13 @@ impl Shake256 {
             let available = SHAKE256_RATE - self.pos;
             let take = out.len().min(available);
 
-            // Write state bytes into out word-by-word via to_le_bytes(), so
-            // the compiler can use full-word loads instead of byte shifts.
+            // Write state bytes into out lane-by-lane via `to_le_bytes`, so
+            // the compiler can use full-lane loads instead of byte shifts.
             let mut i = 0;
             while i < take {
-                let word_idx = (self.pos + i) / 8;
+                let lane_idx = (self.pos + i) / 8;
                 let byte_off = (self.pos + i) % 8;
-                let lane_bytes = self.state[word_idx].to_le_bytes();
+                let lane_bytes = self.state[lane_idx].to_le_bytes();
 
                 // Copy as many bytes from this lane as fit in the remaining take.
                 let lane_remaining = 8 - byte_off;
@@ -521,7 +525,7 @@ mod tests {
     #[test]
     fn test_keccak_f_all_zeros() {
         // Initalize all-zero state
-        let mut state = [0u64; SHAKE256_STATE_WORDS];
+        let mut state = [0u64; SHAKE256_STATE_LANES];
 
         // Apply exactly one Keccak-f\[1600\] permutation in-place.
         keccak_f(&mut state);
