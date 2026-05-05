@@ -48,7 +48,8 @@ impl StateProofMessage {
         Self::decode(bytes)
     }
 
-    /// Canonical msgpack encoding. Keys sorted: P(80) b(98) f(102) l(108) v(118).
+    /// Canonical msgpack encoding. Keys sorted in lexicographic order based on ASCII:
+    /// `P(80)`, `b(98)`, `f(102)`, `l(108)`, `v(118)`.
     fn to_msgpack_bytes(&self) -> Vec<u8> {
         AlgorandMessagePack::new()
             .uint("P", self.ln_proven_weight)

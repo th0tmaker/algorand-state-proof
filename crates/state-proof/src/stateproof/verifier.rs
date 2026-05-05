@@ -328,13 +328,13 @@ pub fn verify_state_proof(
         message_hash: msg_hash,
     };
     
-    let mut coins = CoinGenerator::new(&seed);
+    let mut coin_gen = CoinGenerator::new(&seed);
 
     for (i, &pos) in state_proof.positions_to_reveal.iter().enumerate() {
         // MissingReveal fires if a coin lands on a position that has no corresponding reveal entry.
         let reveal = reveal_map.get(&pos).copied()
             .ok_or(VerifyError::MissingReveal { position: pos })?;
-        let coin = coins.next_coin();
+        let coin = coin_gen.next_coin();
         let l     = reveal.sig_slot.l;
         let upper = l.checked_add(reveal.participant.weight)
             .ok_or(VerifyError::WeightRangeOverflow { position: pos })?;
