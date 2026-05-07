@@ -49,9 +49,9 @@ pub(crate) const COIN_CHOICE_SEED_SIZE: usize =
 
 // ── Crypto primitives ─────────────────────────────────────────────────────────
 
-/// Identifies the `MerkleSignatureScheme` cryptographic suite (Sumhash + Falcon).
-/// Encoded as the first 2 bytes of `MerkleSignatureScheme::to_fixed_bytes`.
-pub(crate) const MERKLE_SIG_SCHEME_ID: u16 = 0;
+/// Identifies the suite of cryptographic primitives used in the State Proof 
+/// `MerkleSignatureScheme` (0 = Falcon (sig scheme) + Sumhash (hash function)).
+pub(crate) const MSS_CRYPTO_SUITE_ID: u16 = 0;
 
 /// Coin generator version byte. Incrementing this changes coin selection,
 /// effectively invalidating all proofs built under the previous version.
@@ -106,7 +106,7 @@ pub(crate) const DOMAIN_COIN_SEED: &[u8] = b"spc";
 ///
 /// Binds the proof to a specific block interval. The 32-byte result is the
 /// `msg_hash` parameter of `verify_state_proof`.
-pub(crate) const DOMAIN_MSG_HASH: &[u8] = b"spm";
+pub(crate) const DOMAIN_SP_MSG_HASH: &[u8] = b"spm";
 
 /// **Light block header VC leaf** (block headers tree, root = `blockHeadersCommitment`).
 ///
@@ -115,21 +115,12 @@ pub(crate) const DOMAIN_MSG_HASH: &[u8] = b"spm";
 /// Commits an individual block header into the SHA-256 VcTree that covers the
 /// 256 blocks in the attested interval. Verifying this tree against
 /// `blockHeadersCommitment` confirms which transactions the state proof attests to.
-pub(crate) const DOMAIN_BLOCK_HEADER: &[u8] = b"B256";
-
-/// **Transaction STIB preimage** — domain prefix used to hash `Sig(Tx) || ApplyData`.
-///
-/// `SHA-256("STIB" || Sig(Tx) || ApplyData)` = the `stibhash` returned by
-/// `GET /v2/blocks/{round}/transactions/{txid}/proof?hashtype=sha256`.
-#[allow(dead_code)]
-pub(crate) const DOMAIN_TXN_STIB: &[u8] = b"STIB";
+pub(crate) const DOMAIN_LIGHT_BLOCK_HEADER: &[u8] = b"B256";
 
 /// **Transaction leaf** — domain prefix for the SHA-256 transaction commitment tree leaf.
 ///
-/// Leaf = `SHA-256("TL" || SHA-256("TX" || canonical_msgpack(txn)) || stibhash)`
+/// Leaf = `SHA-256("TL" || txn_sha256 || stib_sha256)`
 ///
-/// where:
-///   - `SHA-256("TX" || msgpack(txn))` is the SHA-256 transaction ID
-///   - `stibhash = SHA-256("STIB" || Sig(Tx) || ApplyData)` from the proof API
-#[allow(dead_code)]
+/// * `txn_sha256` = The digest of `SHA-256("TX" || canonical_msgpack(txn))`. 
+/// * `stib_sha256` = The digest of `SHA-256("STIB" || Sig(Tx) || ApplyData)`.
 pub(crate) const DOMAIN_TXN_LEAF: &[u8] = b"TL";

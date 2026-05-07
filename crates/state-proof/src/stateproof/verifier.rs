@@ -8,7 +8,7 @@ use merkle::{hash_obj, Hashable, MerkleHasher, Sumhash512, Sumhash512Digest};
 
 use super::constants::{
     DOMAIN_EMPTY_SLOT, DOMAIN_EPHEMERAL_KEY, DOMAIN_PARTICIPANT, DOMAIN_SIG_SLOT,
-    LN2_FIXED_POINT, MERKLE_SIG_SCHEME_ID, STRENGTH_TARGET, VC_PROOF_MAX_DEPTH,
+    LN2_FIXED_POINT, MSS_CRYPTO_SUITE_ID, STRENGTH_TARGET, VC_PROOF_MAX_DEPTH,
 };
 use super::message::{StateProofMessage, TrustAnchor};
 use super::{
@@ -115,7 +115,7 @@ impl Hashable for ParticipantLeaf<'_> {
 /// `round` is the start of the current lifetime window (`first_round_in_key_lifetime`),
 /// not the exact round being proven — the same key covers the whole window.
 ///
-/// Domain tag `"KP"`. Layout: `crypto_id(2) || round(8) || pubkey(1793)`.
+/// Domain tag `"KP"`. Layout: `crypto_suite_id(2) || round(8) || pubkey(1793)`.
 struct CommittablePK<'a> {
     verifying_key: &'a PublicKey,
     round: u64,
@@ -124,7 +124,7 @@ struct CommittablePK<'a> {
 impl Hashable for CommittablePK<'_> {
     fn hash_into<H: MerkleHasher>(&self, h: &mut H) {
         h.update(DOMAIN_EPHEMERAL_KEY);
-        h.update(&MERKLE_SIG_SCHEME_ID.to_le_bytes());
+        h.update(&MSS_CRYPTO_SUITE_ID.to_le_bytes());
         h.update(&self.round.to_le_bytes());
         h.update(self.verifying_key.as_bytes());
     }

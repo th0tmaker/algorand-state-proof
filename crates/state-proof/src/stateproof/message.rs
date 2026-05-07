@@ -5,7 +5,7 @@ use sha2::{Digest as Sha2Digest, Sha256};
 use merkle::{Sumhash512Digest, SHA256_DIGEST_SIZE, SUMHASH512_DIGEST_SIZE};
 
 use crate::codec::{AlgorandMessagePack, DecodeError, MsgPackDecode, Reader};
-use super::{MessageHash, constants::DOMAIN_MSG_HASH};
+use super::{MessageHash, constants::DOMAIN_SP_MSG_HASH};
 
 /// The message that a State Proof attests to, covering one block interval.
 ///
@@ -67,7 +67,7 @@ impl StateProofMessage {
     pub fn hash(&self) -> MessageHash {
         let encoded = self.to_msgpack_bytes();
         let mut h = Sha256::new();
-        Sha2Digest::update(&mut h, DOMAIN_MSG_HASH);
+        Sha2Digest::update(&mut h, DOMAIN_SP_MSG_HASH);
         Sha2Digest::update(&mut h, &encoded);
         Sha2Digest::finalize(h).into()
     }

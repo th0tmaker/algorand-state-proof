@@ -11,7 +11,7 @@ pub use message::{StateProofMessage, TrustAnchor};
 pub use verifier::{VerifyError, verify_state_proof};
 
 pub(crate) use coin::{CoinChoiceSeed, CoinGenerator, ln_int_approximation};
-use constants::{MAX_REVEALS, MERKLE_SIG_SCHEME_FIXED_REPR_SIZE, MERKLE_SIG_SCHEME_ID, MSS_PROOF_MAX_DEPTH};
+use constants::{MAX_REVEALS, MERKLE_SIG_SCHEME_FIXED_REPR_SIZE, MSS_CRYPTO_SUITE_ID, MSS_PROOF_MAX_DEPTH};
 
 use algorand_falcon_keys::{
     CompressedSignature, PublicKey,
@@ -149,7 +149,7 @@ impl MerkleSignatureScheme {
         let mut out = [0u8; MERKLE_SIG_SCHEME_FIXED_REPR_SIZE];
         let mut pos = 0;
 
-        out[pos..pos + 2].copy_from_slice(&MERKLE_SIG_SCHEME_ID.to_le_bytes()); pos += 2;
+        out[pos..pos + 2].copy_from_slice(&MSS_CRYPTO_SUITE_ID.to_le_bytes()); pos += 2;
         out[pos..pos + FALCON_DET1024_SIG_CT_SIZE].copy_from_slice(ct.as_bytes()); pos += FALCON_DET1024_SIG_CT_SIZE;
         out[pos..pos + FALCON_DET1024_PUBKEY_SIZE].copy_from_slice(self.verifying_key.as_bytes()); pos += FALCON_DET1024_PUBKEY_SIZE;
         out[pos..pos + 8].copy_from_slice(&self.vc_index.to_le_bytes()); pos += 8;

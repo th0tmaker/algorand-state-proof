@@ -3,7 +3,7 @@
 use merkle::{hash_obj, Hashable, MerkleHasher, Proof, Sha256, SHA256_DIGEST_SIZE};
 
 use crate::codec::{AlgorandMessagePack, DecodeError, MsgPackDecode, Reader};
-use super::constants::{DOMAIN_BLOCK_HEADER, DOMAIN_TXN_LEAF};
+use super::constants::{DOMAIN_LIGHT_BLOCK_HEADER, DOMAIN_TXN_LEAF};
 
 
 // ── LightBlockHeader ──────────────────────────────────────────────────────────
@@ -42,7 +42,7 @@ use super::constants::{DOMAIN_BLOCK_HEADER, DOMAIN_TXN_LEAF};
 /// - `GET /v2/blocks/{round}`. Retrieves the full block data (header + transactions). 
 /// - `GET /v2/blocks/{round}?header-only=true`. Retrieves only the block header (no transactions).
 /// - `GET /v2/blocks/{round}/lightheader/proof`. Computes the VC tree path and outputs the proof, 
-///    tree depth and the index position of the block within the tree.
+///   tree depth and the index position of the block within the tree.
 ///
 /// Note: Algod daemon does not provide a `LightBlockHeader` directly. It must be
 /// constructed locally by extracting and re-encoding the relevant fields
@@ -171,7 +171,7 @@ impl MsgPackDecode for LightBlockHeader {
 
 impl Hashable for LightBlockHeader {
     fn hash_into<H: MerkleHasher>(&self, h: &mut H) {
-        h.update(DOMAIN_BLOCK_HEADER);
+        h.update(DOMAIN_LIGHT_BLOCK_HEADER);
         h.update(&self.to_msgpack_bytes());
     }
 }
