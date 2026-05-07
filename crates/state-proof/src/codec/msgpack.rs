@@ -100,10 +100,25 @@ enum Value {
 
 // ── AlgorandMessagePack ───────────────────────────────────────────────────────
 
-/// Canonical MessagePack builder that is compatibale with Algorand specs.
+/// ## Overview
+/// 
+/// Canonical MessagePack builder compatible with Algorand's encoding rules.
 ///
 /// Keys are sorted lexicographically on [AlgorandMessagePack::encode];
 /// zero and empty fields are omitted automatically.
+///
+/// ## Limitations
+/// 
+/// This builder supports only three value kinds: unsigned integers, binary
+/// blobs, and nested maps.  All binary values are emitted as msgpack **bin**
+/// (`0xc4`–`0xc6`), never as fixstr/str.
+///
+/// This is correct for every type currently encoded here (`StateProofMessage`,
+/// `LightBlockHeader`, `Proof<Sumhash512>`) because their fields are either
+/// integers or raw bytes.  It would produce incorrect canonical bytes for any
+/// type that has a **string-valued** field (e.g. an Algorand transaction's
+/// `type = "axfer"`, which must be fixstr `0xa5`).  Do not use this builder
+/// to encode transactions or any other type with string field values.
 pub(crate) struct AlgorandMessagePack {
     /// Holds ordered key-value pairs for Algorand MessagePack encoding, where
     /// the key is a string tag and the value is a variant of `Value`.

@@ -347,6 +347,7 @@ pub fn verify_state_proof(
     Ok(TrustAnchor::from(message))
 }
 
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

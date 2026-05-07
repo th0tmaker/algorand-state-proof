@@ -117,14 +117,19 @@ pub(crate) const DOMAIN_MSG_HASH: &[u8] = b"spm";
 /// `blockHeadersCommitment` confirms which transactions the state proof attests to.
 pub(crate) const DOMAIN_BLOCK_HEADER: &[u8] = b"B256";
 
-/// **Transaction leaf** — domain prefix for both transaction commitment trees.
+/// **Transaction STIB preimage** — domain prefix used to hash `Sig(Tx) || ApplyData`.
 ///
-/// Primary tree (native): `SHA-512/256("STIB" || Sig(Tx) || ApplyData)`
-/// SHA-256 tree (for cross-chain use, root = `LightBlockHeader::txn_commitment`):
-///   `SHA-256("STIB" || Sig(Tx) || ApplyData)`
-///
-/// The SHA-256 `stibhash` is returned by
-/// `GET /v2/blocks/{round}/transactions/{txid}/proof?hashtype=sha256`
-/// and passed directly to `verify_txn_commitment`.
+/// `SHA-256("STIB" || Sig(Tx) || ApplyData)` = the `stibhash` returned by
+/// `GET /v2/blocks/{round}/transactions/{txid}/proof?hashtype=sha256`.
 #[allow(dead_code)]
-pub(crate) const DOMAIN_TXN_LEAF: &[u8] = b"STIB";
+pub(crate) const DOMAIN_TXN_STIB: &[u8] = b"STIB";
+
+/// **Transaction leaf** — domain prefix for the SHA-256 transaction commitment tree leaf.
+///
+/// Leaf = `SHA-256("TL" || SHA-256("TX" || canonical_msgpack(txn)) || stibhash)`
+///
+/// where:
+///   - `SHA-256("TX" || msgpack(txn))` is the SHA-256 transaction ID
+///   - `stibhash = SHA-256("STIB" || Sig(Tx) || ApplyData)` from the proof API
+#[allow(dead_code)]
+pub(crate) const DOMAIN_TXN_LEAF: &[u8] = b"TL";
