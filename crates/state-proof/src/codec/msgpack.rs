@@ -290,7 +290,7 @@ impl<'a> Reader<'a> {
             0xdb => self.read_u32()? as usize,
             _ => return Err(DecodeError::UnexpectedType { expected: "str", got: b }),
         };
-        std::str::from_utf8(self.read_bytes(len)?).map_err(|_| DecodeError::InvalidUtf8)
+        core::str::from_utf8(self.read_bytes(len)?).map_err(|_| DecodeError::InvalidUtf8)
     }
 
     /// Reads a `MessagePack` unsigned integer and returns it as `u64`.
@@ -310,9 +310,14 @@ impl<'a> Reader<'a> {
     pub(crate) fn read_bin(&mut self) -> Result<&'a [u8], DecodeError> {
         let b = self.read_byte()?;
         let len = match b {
+            // v1 bin types
             0xc4 => self.read_byte()? as usize,
             0xc5 => self.read_u16()? as usize,
             0xc6 => self.read_u32()? as usize,
+            // v0 raw/str types (Raw=true)
+            0xa0..=0xbf => (b & 0x1f) as usize,
+            0xda => self.read_u16()? as usize,
+            0xdb => self.read_u32()? as usize,
             _ => return Err(DecodeError::UnexpectedType { expected: "bin", got: b }),
         };
         self.read_bytes(len)
@@ -590,7 +595,7 @@ mod tests {
     /// skip() must advance past an unknown fixmap entry (key + value).
     #[test]
     fn reader_skip_unknown_key() {
-        // fixmap(2): "known"=1, "unknown"=42 — simulate reading known, skipping unknown
+        // fixmap(2): "known"=1, "unknown"=42 — simulate reading known, skipping unknown.
         let mp = AlgorandMessagePack::new().uint("known", 1).uint("unknown", 42).encode();
         let mut r = Reader::new(&mp);
         let n = r.read_map_len().unwrap();
@@ -603,6 +608,17 @@ mod tests {
         r.skip().unwrap(); // key
         r.skip().unwrap(); // value
         assert_eq!(r.remaining(), 0);
+    }
+
+    /// read_bin accepts v0 raw/str encoding (Raw=true on wire format).
+    #[test]
+    fn reader_reads_raw_str_as_bin() {
+        // fixraw(2): 0xa2 0xde 0xad  — v0 raw format for 2 bytes.
+        let mut r = Reader::new(&[0xa2, 0xde, 0xad]);
+        assert_eq!(r.read_bin().unwrap(), &[0xde, 0xad]);
+        // raw16: 0xda 0x00 0x03 + 3 bytes.
+        let mut r2 = Reader::new(&[0xda, 0x00, 0x03, 0x01, 0x02, 0x03]);
+        assert_eq!(r2.read_bin().unwrap(), &[0x01, 0x02, 0x03]);
     }
 
     // ── Decode: error cases ───────────────────────────────────────────────────

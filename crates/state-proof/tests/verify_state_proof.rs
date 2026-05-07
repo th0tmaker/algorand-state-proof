@@ -336,21 +336,22 @@ fn make_message_2() -> StateProofMessage {
     }
 }
 
+
 // ── Block header commitment test ──────────────────────────────────────────────
-//
-// Block 60000000's consensus protocol has StateProofBlockHashInLightHeader set,
-// so the LightBlockHeader uses block_hash ("1") and omits seed ("0") (Go omitempty).
 
 /// Verifies that block 60000000 (index 255 in the 256-block VcTree) is correctly
 /// committed under `SP_MSG_BLOCK_HEADERS_COMMITMENT` using a real mainnet proof.
+/// 
+/// Block 60000000's consensus protocol has StateProofBlockHashInLightHeader set,
+/// so the `LightBlockHeader`` uses block_hash ("1") and omits seed ("0").
 #[test]
 fn verify_block_header_commitment_mainnet() {
     let header = LightBlockHeader {
-        seed:            [0u8; 32],              // omitted — protocol uses block_hash
-        block_hash:      BLOCK_60000000_HASH,
-        genesis_hash:    BLOCK_60000000_GENESIS_HASH,
-        round:           SP_LATEST_RND,
-        txn_commitment:  BLOCK_60000000_TXN_COMMITMENT,
+        seed: [0u8; 32],  // omitted — protocol uses `block_hash`
+        block_hash: BLOCK_60000000_HASH,
+        genesis_hash: BLOCK_60000000_GENESIS_HASH,
+        round: SP_LATEST_RND,
+        txn_commitment: BLOCK_60000000_TXN_COMMITMENT,
     };
     let proof = Proof::<Sha256>::new(8, BLOCK_60000000_HEADER_PROOF.to_vec());
     assert!(verify_block_header_commitment(&header, 255, &proof, &SP_MSG_BLOCK_HEADERS_COMMITMENT));
@@ -360,13 +361,14 @@ fn verify_block_header_commitment_mainnet() {
 #[test]
 fn verify_block_header_commitment_rejects_wrong_header() {
     let mut header = LightBlockHeader {
-        seed:            [0u8; 32],
-        block_hash:      BLOCK_60000000_HASH,
-        genesis_hash:    BLOCK_60000000_GENESIS_HASH,
-        round:           SP_LATEST_RND,
-        txn_commitment:  BLOCK_60000000_TXN_COMMITMENT,
+        seed: [0u8; 32],
+        block_hash: BLOCK_60000000_HASH,
+        genesis_hash: BLOCK_60000000_GENESIS_HASH,
+        round: SP_LATEST_RND,
+        txn_commitment: BLOCK_60000000_TXN_COMMITMENT,
     };
-    header.block_hash[0] ^= 0xff;
+
+    header.block_hash[0] ^= 0xff;  // change `block_hash` value to create an invalid block header    
     let proof = Proof::<Sha256>::new(8, BLOCK_60000000_HEADER_PROOF.to_vec());
     assert!(!verify_block_header_commitment(&header, 255, &proof, &SP_MSG_BLOCK_HEADERS_COMMITMENT));
 }
