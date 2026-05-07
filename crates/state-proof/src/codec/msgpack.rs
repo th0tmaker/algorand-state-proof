@@ -100,7 +100,7 @@ enum Value {
 
 // ── AlgorandMessagePack ───────────────────────────────────────────────────────
 
-/// Canonical MessagePack map builder that is Algorand-compatible.
+/// Canonical MessagePack builder that is compatibale with Algorand specs.
 ///
 /// Keys are sorted lexicographically on [AlgorandMessagePack::encode];
 /// zero and empty fields are omitted automatically.
@@ -111,66 +111,8 @@ pub(crate) struct AlgorandMessagePack {
 }
 
 impl AlgorandMessagePack {
-    // Creates a new instance of the serialization format ready to append input data
-    pub(crate) fn new() -> Self {
-        Self { entries: Vec::new() }
-    }
-
-    /// Appends a u64 field; omitted if `v == 0`.
-    pub(crate) fn uint(mut self, key: &'static str, v: u64) -> Self {
-        if v != 0 {
-            self.entries.push((key, Value::Uint(v)));
-        }
-        self
-    }
-
-    /// Appends a binary blob field; omitted if `b` is empty.
-    pub(crate) fn bytes(mut self, key: &'static str, b: &[u8]) -> Self {
-        if !b.is_empty() {
-            self.entries.push((key, Value::Bin(b.to_vec())));
-        }
-        self
-    }
-
-    /// Appends an array-of-binaries field; omitted if `elems` is empty.
-    #[allow(dead_code)]
-    pub(crate) fn bytes_array(mut self, key: &'static str, elems: &[impl AsRef<[u8]>]) -> Self {
-        if !elems.is_empty() {
-            let raw: Vec<Vec<u8>> = elems.iter().map(|i| i.as_ref().to_vec()).collect();
-            self.entries.push((key, Value::BinArray(raw)));
-        }
-        self
-    }
-
-    /// Appends an array-of-u64 field; omitted if `elems` is empty.
-    #[allow(dead_code)]
-    pub(crate) fn uint_array(mut self, key: &'static str, elems: &[u64]) -> Self {
-        if !elems.is_empty() {
-            self.entries.push((key, Value::UintArray(elems.to_vec())));
-        }
-        self
-    }
-
-    /// Appends an integer-keyed map field; omitted if `entries` is empty.
-    #[allow(dead_code)]
-    pub(crate) fn uint_keyed_map(mut self, key: &'static str, entries: Vec<(u64, AlgorandMessagePack)>) -> Self {
-        if !entries.is_empty() {
-            self.entries.push((key, Value::UintKeyedMap(entries)));
-        }
-        self
-    }
-
-    /// Appends a nested map field; omitted if the inner map has no entries.
-    #[allow(dead_code)]
-    pub(crate) fn map(mut self, key: &'static str, inner: AlgorandMessagePack) -> Self {
-        if !inner.entries.is_empty() {
-            self.entries.push((key, Value::Map(inner)));
-        }
-        self
-    }
-
-    // Sorts keys lexicographically (Algorand canonical ordering requirement) and
-    // writes the map into `out`. Called recursively for nested Value::Map entries.
+    /// Sorts keys lexicographically (Algorand canonical ordering requirement) and
+    /// writes the map into `out`. Called recursively for nested Value::Map entries.
     fn encode_into(mut self, out: &mut Vec<u8>) {
         self.entries.sort_unstable_by_key(|(k, _)| *k);
         write_map_header(out, self.entries.len());
@@ -198,25 +140,68 @@ impl AlgorandMessagePack {
         }
     }
 
-    /// Sorts keys and returns canonical MessagePack bytes.
+    // Creates a new instance of the serialization format ready to append input data
+    pub(crate) fn new() -> Self {
+        Self { entries: Vec::new() }
+    }
+
+    /// Appends a u64 field; omitted if `v == 0`.
+    pub(crate) fn uint(mut self, key: &'static str, v: u64) -> Self {
+        if v != 0 {
+            self.entries.push((key, Value::Uint(v)));
+        }
+        self
+    }
+
+    /// Appends a binary blob field; omitted if `b` is empty.
+    pub(crate) fn bytes(mut self, key: &'static str, b: &[u8]) -> Self {
+        if !b.is_empty() {
+            self.entries.push((key, Value::Bin(b.to_vec())));
+        }
+        self
+    }
+
+    /// Appends an array-of-binaries field; omitted if `elems` is empty.
+    pub(crate) fn bytes_array(mut self, key: &'static str, elems: &[impl AsRef<[u8]>]) -> Self {
+        if !elems.is_empty() {
+            let raw: Vec<Vec<u8>> = elems.iter().map(|i| i.as_ref().to_vec()).collect();
+            self.entries.push((key, Value::BinArray(raw)));
+        }
+        self
+    }
+
+    /// Appends an array-of-u64 field; omitted if `elems` is empty.
+    #[allow(dead_code)]
+    pub(crate) fn uint_array(mut self, key: &'static str, elems: &[u64]) -> Self {
+        if !elems.is_empty() {
+            self.entries.push((key, Value::UintArray(elems.to_vec())));
+        }
+        self
+    }
+
+    /// Appends an integer-keyed map field; omitted if `entries` is empty.
+    #[allow(dead_code)]
+    pub(crate) fn uint_keyed_map(mut self, key: &'static str, entries: Vec<(u64, AlgorandMessagePack)>) -> Self {
+        if !entries.is_empty() {
+            self.entries.push((key, Value::UintKeyedMap(entries)));
+        }
+        self
+    }
+
+    /// Appends a nested map field; omitted if the inner map has no entries.
+    pub(crate) fn map(mut self, key: &'static str, inner: AlgorandMessagePack) -> Self {
+        if !inner.entries.is_empty() {
+            self.entries.push((key, Value::Map(inner)));
+        }
+        self
+    }
+
+    /// Returns canonical `MessagePack` bytes.
     pub(crate) fn encode(self) -> Vec<u8> {
         let mut out = Vec::new();
         self.encode_into(&mut out);
         out
     }
-}
-
-
-// ── MsgPackEncode ─────────────────────────────────────────────────────────────
-
-/// Types that can be encoded as a canonical MessagePack map.
-#[allow(dead_code)]
-pub(crate) trait MsgPackEncode {
-    /// Converts into an intermediate `AlgorandMessagePack` type.
-    fn to_msgpack(&self) -> AlgorandMessagePack;
-
-    /// Encodes directly into canonical `AlgorandMessagePack` bytes.
-    fn encode(&self) -> Vec<u8> { self.to_msgpack().encode() }
 }
 
 
@@ -426,8 +411,8 @@ mod tests {
     #[test]
     fn uint_fixint() {
         // fixmap(1) + fixstr("t") + fixint(1)
-        let out = AlgorandMessagePack::new().uint("t", 1).encode();
-        assert_eq!(out, vec![
+        let mp = AlgorandMessagePack::new().uint("t", 1).encode();
+        assert_eq!(mp, vec![
             0x81,       // fixmap, 1 entry
             0xa1, b't', // fixstr "t"
             0x01,       // fixint 1
@@ -437,25 +422,25 @@ mod tests {
     /// Keys must be sorted lexicographically.
     #[test]
     fn keys_sorted() {
-        let out = AlgorandMessagePack::new()
+        let mp = AlgorandMessagePack::new()
             .uint("z", 1)
             .uint("a", 2)
             .encode();
         // fixmap(2), then "a"=2, then "z"=1
-        assert_eq!(out[1], 0xa1);
-        assert_eq!(out[2], b'a');
-        assert_eq!(out[4], 0xa1);
-        assert_eq!(out[5], b'z');
+        assert_eq!(mp[1], 0xa1);
+        assert_eq!(mp[2], b'a');
+        assert_eq!(mp[4], 0xa1);
+        assert_eq!(mp[5], b'z');
     }
 
     /// Nested map with a non-zero inner field must appear.
     #[test]
     fn nested_map_non_empty() {
-        let out = AlgorandMessagePack::new()
+        let mp = AlgorandMessagePack::new()
             .map("hsh", AlgorandMessagePack::new().uint("t", 1))
             .encode();
         // fixmap(1) + fixstr("hsh") + fixmap(1) + fixstr("t") + fixint(1)
-        assert_eq!(out, vec![
+        assert_eq!(mp, vec![
             0x81,
             0xa3, b'h', b's', b'h',
             0x81,
@@ -467,10 +452,10 @@ mod tests {
     /// Nested map with all-zero inner fields must be omitted entirely.
     #[test]
     fn nested_map_empty_omitted() {
-        let out = AlgorandMessagePack::new()
+        let mp = AlgorandMessagePack::new()
             .map("hsh", AlgorandMessagePack::new().uint("t", 0))
             .encode();
-        assert_eq!(out, vec![0x80]);
+        assert_eq!(mp, vec![0x80]);
     }
 
     // ── Encode: uint size variants ────────────────────────────────────────────
@@ -478,29 +463,29 @@ mod tests {
     /// Values 0x80..=0xff must use uint8 format (0xcc prefix).
     #[test]
     fn uint_u8() {
-        let out = AlgorandMessagePack::new().uint("v", 0x80).encode();
-        assert_eq!(out[3..], [0xcc, 0x80]);
+        let mp = AlgorandMessagePack::new().uint("v", 0x80).encode();
+        assert_eq!(mp[3..], [0xcc, 0x80]);
     }
 
     /// Values 0x100..=0xffff must use uint16 format (0xcd prefix).
     #[test]
     fn uint_u16() {
-        let out = AlgorandMessagePack::new().uint("v", 0x100).encode();
-        assert_eq!(out[3..], [0xcd, 0x01, 0x00]);
+        let mp = AlgorandMessagePack::new().uint("v", 0x100).encode();
+        assert_eq!(mp[3..], [0xcd, 0x01, 0x00]);
     }
 
     /// Values 0x10000..=0xffffffff must use uint32 format (0xce prefix).
     #[test]
     fn uint_u32() {
-        let out = AlgorandMessagePack::new().uint("v", 0x10000).encode();
-        assert_eq!(out[3..], [0xce, 0x00, 0x01, 0x00, 0x00]);
+        let mp = AlgorandMessagePack::new().uint("v", 0x10000).encode();
+        assert_eq!(mp[3..], [0xce, 0x00, 0x01, 0x00, 0x00]);
     }
 
     /// Values above 0xffffffff must use uint64 format (0xcf prefix).
     #[test]
     fn uint_u64() {
-        let out = AlgorandMessagePack::new().uint("v", 0x1_0000_0000).encode();
-        assert_eq!(out[3..], [0xcf, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]);
+        let mp = AlgorandMessagePack::new().uint("v", 0x1_0000_0000).encode();
+        assert_eq!(mp[3..], [0xcf, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]);
     }
 
     // ── Encode: bytes and bytes_array ─────────────────────────────────────────
@@ -508,17 +493,17 @@ mod tests {
     /// A bytes field encodes with bin8 header (0xc4) followed by length and data.
     #[test]
     fn bytes_bin8() {
-        let out = AlgorandMessagePack::new().bytes("b", &[0xde, 0xad]).encode();
+        let mp = AlgorandMessagePack::new().bytes("b", &[0xde, 0xad]).encode();
         // fixmap(1) + fixstr("b") + bin8 + len=2 + data
-        assert_eq!(out, vec![0x81, 0xa1, b'b', 0xc4, 0x02, 0xde, 0xad]);
+        assert_eq!(mp, vec![0x81, 0xa1, b'b', 0xc4, 0x02, 0xde, 0xad]);
     }
 
     /// A bytes_array field encodes as a fixarray of bin8 entries.
     #[test]
     fn bytes_array_encoding() {
         let elems: &[&[u8]] = &[&[0x01], &[0x02, 0x03]];
-        let out = AlgorandMessagePack::new().bytes_array("p", elems).encode();
-        assert_eq!(out, vec![
+        let mp = AlgorandMessagePack::new().bytes_array("p", elems).encode();
+        assert_eq!(mp, vec![
             0x81,                   // fixmap(1)
             0xa1, b'p',             // fixstr "p"
             0x92,                   // fixarray(2)
@@ -532,8 +517,8 @@ mod tests {
     /// A uint_array field encodes as a fixarray of fixints.
     #[test]
     fn uint_array_encoding() {
-        let out = AlgorandMessagePack::new().uint_array("pr", &[1, 2, 3]).encode();
-        assert_eq!(out, vec![
+        let mp = AlgorandMessagePack::new().uint_array("pr", &[1, 2, 3]).encode();
+        assert_eq!(mp, vec![
             0x81,               // fixmap(1)
             0xa2, b'p', b'r',   // fixstr "pr"
             0x93,               // fixarray(3)
@@ -555,14 +540,14 @@ mod tests {
             (2u64, AlgorandMessagePack::new().uint("v", 20)),
             (1u64, AlgorandMessagePack::new().uint("v", 10)),
         ];
-        let out = AlgorandMessagePack::new().uint_keyed_map("r", entries).encode();
-        let mut r = Reader::new(&out);
-        assert_eq!(r.read_map_len().unwrap(), 1);   // outer map
+        let mp = AlgorandMessagePack::new().uint_keyed_map("r", entries).encode();
+        let mut r = Reader::new(&mp);
+        assert_eq!(r.read_map_len().unwrap(), 1);  // outer map
         assert_eq!(r.read_str().unwrap(), "r");
-        assert_eq!(r.read_map_len().unwrap(), 2);   // inner uint-keyed map
-        assert_eq!(r.read_uint().unwrap(), 1);      // key 1 comes first
+        assert_eq!(r.read_map_len().unwrap(), 2);  // inner uint-keyed map
+        assert_eq!(r.read_uint().unwrap(), 1);  // key 1 comes first
         r.read_map_len().unwrap(); r.read_str().unwrap(); assert_eq!(r.read_uint().unwrap(), 10);
-        assert_eq!(r.read_uint().unwrap(), 2);      // key 2 comes second
+        assert_eq!(r.read_uint().unwrap(), 2);  // key 2 comes second
         r.read_map_len().unwrap(); r.read_str().unwrap(); assert_eq!(r.read_uint().unwrap(), 20);
         assert_eq!(r.remaining(), 0);
     }
@@ -606,8 +591,8 @@ mod tests {
     #[test]
     fn reader_skip_unknown_key() {
         // fixmap(2): "known"=1, "unknown"=42 — simulate reading known, skipping unknown
-        let out = AlgorandMessagePack::new().uint("known", 1).uint("unknown", 42).encode();
-        let mut r = Reader::new(&out);
+        let mp = AlgorandMessagePack::new().uint("known", 1).uint("unknown", 42).encode();
+        let mut r = Reader::new(&mp);
         let n = r.read_map_len().unwrap();
         assert_eq!(n, 2);
         // read first key-value
@@ -656,11 +641,6 @@ mod tests {
     #[test]
     fn round_trip_uint() {
         struct Wrapper(u64);
-        impl MsgPackEncode for Wrapper {
-            fn to_msgpack(&self) -> AlgorandMessagePack {
-                AlgorandMessagePack::new().uint("v", self.0)
-            }
-        }
         impl MsgPackDecode for Wrapper {
             fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
                 let n = r.read_map_len()?;
@@ -675,8 +655,8 @@ mod tests {
             }
         }
         for val in [1u64, 0x80, 0x100, 0x10000, 0x1_0000_0000] {
-            let encoded = Wrapper(val).encode();
-            let decoded = Wrapper::decode(&encoded).unwrap();
+            let mp = AlgorandMessagePack::new().uint("v", val).encode();
+            let decoded = Wrapper::decode(&mp).unwrap();
             assert_eq!(decoded.0, val);
         }
     }
@@ -685,11 +665,6 @@ mod tests {
     #[test]
     fn round_trip_bytes() {
         struct Wrapper(Vec<u8>);
-        impl MsgPackEncode for Wrapper {
-            fn to_msgpack(&self) -> AlgorandMessagePack {
-                AlgorandMessagePack::new().bytes("d", &self.0)
-            }
-        }
         impl MsgPackDecode for Wrapper {
             fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
                 let n = r.read_map_len()?;
@@ -704,7 +679,7 @@ mod tests {
             }
         }
         let data = vec![0xde, 0xad, 0xbe, 0xef];
-        let encoded = Wrapper(data.clone()).encode();
+        let encoded = AlgorandMessagePack::new().bytes("d", &data).encode();
         let decoded = Wrapper::decode(&encoded).unwrap();
         assert_eq!(decoded.0, data);
     }

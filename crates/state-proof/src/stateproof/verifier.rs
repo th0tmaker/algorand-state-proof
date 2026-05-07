@@ -351,7 +351,11 @@ pub fn verify_state_proof(
 
 #[cfg(test)]
 mod tests {
-    use super::{verify_state_proof, VerifyError};
+    use super::{
+        verify_state_proof, VerifyError,
+        hash_sig_slot_leaf, hash_participant_leaf,
+        first_round_in_key_lifetime,
+    };
     use crate::stateproof::{Reveal, StateProof};
     use crate::stateproof::message::{StateProofMessage, TrustAnchor};
     use merkle::{Proof, Sumhash512, SUMHASH512_DIGEST_SIZE};
@@ -448,5 +452,86 @@ mod tests {
             verify_state_proof(&sp, &dummy_msg(), &dummy_anchor(0)),
             Err(VerifyError::MissingReveal { position: 0 })
         );
+    }
+
+    #[test]
+    fn coin_out_of_range() {
+        // Default reveal has l=0 and weight=0 → upper = l + weight = 0.
+        // Every u64 coin satisfies coin >= upper=0, so CoinOutOfRange always fires.
+        // 5 positions are needed to pass the strength inequality with signed_weight=u64::MAX.
+        let mut sp = hollow(u64::MAX, 5);
+        let reveal = Reveal::default();
+
+        // Compute leaf hashes so the single-element depth-0 batch VC passes:
+        // verify_batch_vc(&[(0, leaf)], &leaf) succeeds at depth=0 since root == leaf.
+        let mut h = Sumhash512::new();
+        let sig_leaf  = hash_sig_slot_leaf(&mut h, 0, &reveal.sig_slot).unwrap();
+        let part_leaf = hash_participant_leaf(&mut h, &reveal.participant);
+
+        sp.reveals        = vec![(0, reveal)];
+        sp.sig_commitment = sig_leaf;
+        let anchor = TrustAnchor { part_commitment: part_leaf, ln_proven_weight: 0 };
+
+        assert!(matches!(
+            verify_state_proof(&sp, &dummy_msg(), &anchor),
+            Err(VerifyError::CoinOutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn weight_range_overflow() {
+        // l=1 and weight=u64::MAX → 1.checked_add(u64::MAX) overflows.
+        let mut sp = hollow(u64::MAX, 5);
+        let mut reveal = Reveal::default();
+        reveal.sig_slot.l = 1;
+        reveal.participant.weight = u64::MAX;
+
+        // Empty sig slot → sig leaf is Hash("MB") regardless of l.
+        // Participant leaf covers weight, so part_leaf differs from the default.
+        let mut h = Sumhash512::new();
+        let sig_leaf  = hash_sig_slot_leaf(&mut h, 0, &reveal.sig_slot).unwrap();
+        let part_leaf = hash_participant_leaf(&mut h, &reveal.participant);
+
+        sp.reveals = vec![(0, reveal)];
+        sp.sig_commitment = sig_leaf;
+        let anchor = TrustAnchor { part_commitment: part_leaf, ln_proven_weight: 0 };
+
+        assert_eq!(
+            verify_state_proof(&sp, &dummy_msg(), &anchor),
+            Err(VerifyError::WeightRangeOverflow { position: 0 })
+        );
+    }
+
+    // ── first_round_in_key_lifetime ───────────────────────────────────────────
+
+    #[test]
+    fn first_round_key_lifetime_zero_returns_round() {
+        // key_lifetime=0 special case: returns round unchanged.
+        assert_eq!(first_round_in_key_lifetime(0, 0), 0);
+        assert_eq!(first_round_in_key_lifetime(999, 0), 999);
+        assert_eq!(first_round_in_key_lifetime(u64::MAX, 0), u64::MAX);
+    }
+
+    #[test]
+    fn first_round_key_lifetime_exact_multiple() {
+        assert_eq!(first_round_in_key_lifetime(256, 256), 256);
+        assert_eq!(first_round_in_key_lifetime(512, 256), 512);
+    }
+
+    #[test]
+    fn first_round_key_lifetime_mid_window() {
+        // Rounds 0–255 all map to window start 0.
+        assert_eq!(first_round_in_key_lifetime(0, 256), 0);
+        assert_eq!(first_round_in_key_lifetime(1, 256), 0);
+        assert_eq!(first_round_in_key_lifetime(255, 256), 0);
+        // Round 356 is in window [256, 512); maps to 256.
+        assert_eq!(first_round_in_key_lifetime(256 + 100, 256), 256);
+    }
+
+    #[test]
+    fn first_round_key_lifetime_one() {
+        // key_lifetime=1: every round is its own window start.
+        assert_eq!(first_round_in_key_lifetime(0, 1), 0);
+        assert_eq!(first_round_in_key_lifetime(u64::MAX, 1), u64::MAX);
     }
 }

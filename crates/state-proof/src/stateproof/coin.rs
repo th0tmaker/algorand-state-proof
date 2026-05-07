@@ -127,8 +127,7 @@ impl CoinGenerator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::super::constants::LN2_FIXED_POINT;
+    use super::{*, super::constants::LN2_FIXED_POINT};
 
     /// Helper method to create a `CoinChoiceSeed` with test values.
     fn make_test_seed(signed_weight: u64) -> CoinChoiceSeed {

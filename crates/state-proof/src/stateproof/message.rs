@@ -133,8 +133,9 @@ impl MsgPackDecode for StateProofMessage {
 /// the data directly to the visitor without a heap allocation.
 #[cfg(feature = "serde")]
 mod bytes64 {
-    use serde::{Deserializer, Serializer, de::{Error, Visitor}};
     use core::fmt;
+
+    use serde::{Deserializer, Serializer, de::{Error, Visitor}};
 
     pub fn serialize<S: Serializer>(val: &[u8; 64], s: S) -> Result<S::Ok, S::Error> {
         s.serialize_bytes(val)

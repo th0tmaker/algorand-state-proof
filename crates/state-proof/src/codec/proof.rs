@@ -3,7 +3,7 @@
 
 use merkle::{Sumhash512, Sumhash512Digest, HashFactory, HashType, Proof, SUMHASH512_DIGEST_SIZE};
 
-use crate::codec::{AlgorandMessagePack, DecodeError, MsgPackDecode, MsgPackEncode, Reader};
+use crate::codec::{AlgorandMessagePack, DecodeError, MsgPackDecode, Reader};
 
 // ── HashType ──────────────────────────────────────────────────────────────────
 
@@ -15,12 +15,6 @@ impl MsgPackDecode for HashType {
 
 
 // ── HashFactory ───────────────────────────────────────────────────────────────
-
-impl MsgPackEncode for HashFactory {
-    fn to_msgpack(&self) -> AlgorandMessagePack {
-        AlgorandMessagePack::new().uint("t", self.hash_type as u64)
-    }
-}
 
 impl MsgPackDecode for HashFactory {
     fn decode_from(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
@@ -39,13 +33,13 @@ impl MsgPackDecode for HashFactory {
 
 // ── Proof ─────────────────────────────────────────────────────────────────────
 
-impl MsgPackEncode for Proof<Sumhash512> {
-    fn to_msgpack(&self) -> AlgorandMessagePack {
-        AlgorandMessagePack::new()
-            .map("hsh", self.hash_factory.to_msgpack())
-            .bytes_array("pth", &self.path)
-            .uint("td", self.tree_depth as u64)
-    }
+/// Encodes a `Proof<Sumhash512>` into canonical Algorand MessagePack bytes.
+pub(crate) fn encode_proof(proof: &Proof<Sumhash512>) -> Vec<u8> {
+    AlgorandMessagePack::new()
+        .map("hsh", AlgorandMessagePack::new().uint("t", proof.hash_factory.hash_type as u64))
+        .bytes_array("pth", &proof.path)
+        .uint("td", proof.tree_depth as u64)
+        .encode()
 }
 
 impl MsgPackDecode for Proof<Sumhash512> {
@@ -90,7 +84,6 @@ impl MsgPackDecode for Proof<Sumhash512> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::MsgPackEncode;
 
     /// KAT using golden MsgPack bytes produced by Python `algosdk.encoding.msgpack_encode`.
     ///
@@ -136,7 +129,7 @@ mod tests {
         assert_eq!(proof.tree_depth, 5);
         assert_eq!(proof.hash_factory, HashFactory::sumhash512());
         assert_eq!(proof.path.len(), 12);
-        assert_eq!(proof.encode(), golden);
+        assert_eq!(encode_proof(&proof), golden);
     }
 
     /// Decoding a Proof<Sumhash512> whose wire HashFactory says Sha256 must return
@@ -144,11 +137,11 @@ mod tests {
     #[test]
     fn wrong_hash_type_is_rejected() {
         // Encode a minimal proof (depth=1, empty path) with hash_type = Sha256 (2).
-        let wire = AlgorandMessagePack::new()
+        let mp = AlgorandMessagePack::new()
             .map("hsh", AlgorandMessagePack::new().uint("t", HashType::Sha256 as u64))
             .uint("td", 1)
             .encode();
-        let result = Proof::<Sumhash512>::decode(&wire);
+        let result = Proof::<Sumhash512>::decode(&mp);
         assert_eq!(
             result,
             Err(DecodeError::HashTypeMismatch {

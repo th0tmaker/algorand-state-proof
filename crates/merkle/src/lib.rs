@@ -125,10 +125,6 @@ pub trait MerkleHasher: Sized {
     fn update(&mut self, data: &[u8]);
 
     /// Finalizes the hash and resets the internal state for reuse.
-    ///
-    /// For [Sumhash512]: writes the digest and resets the running state while
-    /// preserving the expensive lookup table built at construction.
-    /// For [Sha256]: swaps in a fresh instance, which is equally cheap.
     fn finalize_reset(&mut self) -> Self::Digest;
 }
 
@@ -176,7 +172,7 @@ impl MerkleHasher for Sha256 {
 
 /// Hashes `obj` into a digest, reusing `h` across calls.
 ///
-/// Calls `obj.hash_into(h)` (which feeds domain + data directly into the hasher)
+/// Calls `obj.hash_into(h)`, which feeds domain and data directly into the hasher
 /// then finalizes and resets. For [Sumhash512], reusing `h` avoids rebuilding
 /// the expensive lookup table.
 pub fn hash_obj<H: MerkleHasher>(h: &mut H, obj: &impl Hashable) -> H::Digest {
