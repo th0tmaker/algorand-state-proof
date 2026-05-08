@@ -54,30 +54,30 @@ use super::constants::{DOMAIN_LIGHT_BLOCK_HEADER, DOMAIN_TXN_LEAF};
 /// the constructed `LightBlockHeader` is included in the 256-block interval
 /// committed to by the state proof (via `block_headers_commitment`).
 /// 
-/// ## Codec keys
+/// ## Wire codec keys
 /// 
 /// `"0"`, `"1"`, `"gh"`, `"r"`, `"tc"`
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LightBlockHeader {
-    /// Block seed value (`SHA-512/256` digest). 
+    /// 256-bit `SHA-512/256` hash digest acting as the block seed value.
     /// 
-    /// Codec key: `"0"`.
-    pub seed: [u8; 32],
-    /// Hash of the current block  (`SHA-512/256` digest). 
+    /// Wire codec key: `"0"`.
+    pub seed: [u8; SHA256_DIGEST_SIZE],
+    /// 256-bit `SHA-512/256` hash digest acting as the block hash value.
     /// 
-    /// Codec key: `"1"`.
-    pub block_hash: [u8; 32],
-    /// Hash of the ledger genesis config, identifying the network instance. (`SHA-512/256` digest).
+    /// Wire codec key: `"1"`.
+    pub block_hash: [u8; SHA256_DIGEST_SIZE],
+    /// 256-bit `SHA-512/256` hash digest of the ledger genesis, indentifying the unique network instance.
     ///
-    /// Codec key: `"gh"`.
-    pub genesis_hash: [u8; 32],
-    /// Block round number.
+    /// Wire codec key: `"gh"`.
+    pub genesis_hash: [u8; SHA256_DIGEST_SIZE],
+    /// The block round number.
     /// 
-    /// Codec key: `"r"`.
+    /// Wire codec key: `"r"`.
     pub round: u64,
-    /// `SHA-256` Vector Commitment root over the block's transactions.
+    /// 256-bit `SHA-256` hash digest vector commitment root on the block's transactions.
     /// 
-    /// Codec key: `"tc"`.
+    /// Wire codec key: `"tc"`.
     pub txn_commitment: [u8; SHA256_DIGEST_SIZE],
 }
 

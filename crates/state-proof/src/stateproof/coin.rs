@@ -28,12 +28,17 @@ pub fn ln_int_approximation(x: u64) -> Option<u64> {
 pub struct CoinChoiceSeed {
     /// 512-bit `Sumhash512` hash digest vector commitment root on the participant array.
     pub part_commitment: Sumhash512Digest,
-    /// 64-bit LE integer fixed-point approximation of the natural log of
-    /// `proven_weight` with 16 bits of precision: `ceil(2^16 * ln(proven_weight))`.
+    /// Real number encoded as a fixed-point integer with 16-bit precision that 
+    /// represents the natural log of `proven_weight`
+    /// 
+    /// Formula: `ceil(2^16 * ln(proven_weight))`.
+    /// 
+    /// This number is stored inside a 64-bit LE integer for safety insurance and compatibility.
     pub ln_proven_weight: u64,
     /// 512-bit `Sumhash512` hash digest vector commitment root on the signature array
     pub sig_commitment: Sumhash512Digest,
-    /// 64-bit LE integer representing the State Proof signed weight.
+    /// 64-bit LE integer representing total (stake) signed weight of all participants 
+    /// whose signatures appear in `StateProof` the signature array.
     pub signed_weight: u64,
     /// 256-bit `SHA-256` hash digest of the state proof message being attested to.
     pub message_hash: MessageHash,

@@ -10,20 +10,26 @@ pub(crate) use merkle::MERKLE_VC_BOTTOM_LEAF as DOMAIN_EMPTY_SLOT;
 
 // ── Protocol limits ───────────────────────────────────────────────────────────
 
-/// Maximum VC tree depth allowed for `sig_proofs` and `part_proofs` in a valid
-/// `StateProof`. Proofs with `tree_depth` exceeding this are rejected. [State Proof validity]
-pub(crate) const VC_PROOF_MAX_DEPTH: u8 = 20;
+/// Maximum vector commitment tree depth for State Proof participant
+/// (`part_proofs`) and signature (`sig_proofs`) authentication paths.
+/// 
+/// A `StateProof` is invalid if either proof path exceeds this depth.
+pub(crate) const SP_VC_MAX_DEPTH: u8 = 20;
 
-/// Maximum tree depth for the inner ephemeral-key Merkle Signature Scheme tree.
-/// Used to compute the fixed-length proof encoding within a `MerkleSignatureScheme`.
-pub(crate) const MSS_PROOF_MAX_DEPTH: u8 = 16;
+/// Maximum vector commitment tree depth for a `MerkleSignatureScheme`
+/// membership proof.
+///
+/// Bounds the authentication path in `MerkleSignatureScheme::proof` that
+/// links an ephemeral `PublicKey` to its `MerkleVerifier::commitment` root.
+/// 
+/// Limits a participant's total ephemeral keys to at most 2^16.
+pub(crate) const MSS_VC_MAX_DEPTH: u8 = 16;
 
 /// Maximum number of reveals (and positions) permitted in a single `StateProof`.
 pub(crate) const MAX_REVEALS: usize = 640;
 
 /// Security-strength target: `256 = k + 2q` where `(k=128, q=64)` accounts for a
 /// quantum attacker's Grover-style speedup over the hash-based components.
-/// Matches Algorand mainnet `StateProofStrengthTarget`. [Setting Security Strength]
 pub(crate) const STRENGTH_TARGET: u16 = 256;
 
 // ── Wire format sizes ─────────────────────────────────────────────────────────
@@ -32,7 +38,7 @@ pub(crate) const STRENGTH_TARGET: u16 = 256;
 ///
 /// Layout: `tree_depth(1) || (16 − depth) × zero_digest || depth × Sumhash512_digest(64)`
 pub const SUMHASH512_PROOF_FIXED_REPR_SIZE: usize =
-    1 + MSS_PROOF_MAX_DEPTH as usize * SUMHASH512_DIGEST_SIZE;
+    1 + MSS_VC_MAX_DEPTH as usize * SUMHASH512_DIGEST_SIZE;
 
 /// Byte length of the fixed-length binary representation of a `MerkleSignatureScheme`.
 ///
@@ -70,21 +76,21 @@ DOMAIN_EMPTY_SLOT ("MB") is imported above from merkle::MERKLE_VC_BOTTOM_LEAF.*/
 
 /// **Participant VC leaf** (outer participants tree, root = `part_commitment`).
 ///
-/// `Sumhash("spp" || weight(8 LE) || key_lifetime(8 LE) || commitment(64))`
+/// `Sumhash512("spp" || weight(8 LE) || key_lifetime(8 LE) || commitment(64))`
 ///
 /// Commits a participant's stake weight and ephemeral key tree root.
 pub(crate) const DOMAIN_PARTICIPANT: &[u8] = b"spp";
 
 /// **Ephemeral key VC leaf** (inner key tree, root = `participant.pk.commitment`).
 ///
-/// `Sumhash("KP" || scheme_id(2 LE) || round(8 LE) || pubkey(1793))`
+/// `Sumhash512("KP" || scheme_id(2 LE) || round(8 LE) || pubkey(1793))`
 ///
 /// Commits an ephemeral Falcon-1024 public key at its valid round window.
 pub(crate) const DOMAIN_EPHEMERAL_KEY: &[u8] = b"KP";
 
 /// **Signature slot VC leaf** (signatures tree, root = `sig_commitment`).
 ///
-/// `Sumhash("sps" || l(8 LE) || fixed_repr(4366))`
+/// `Sumhash512("sps" || l(8 LE) || fixed_repr(4366))`
 ///
 /// Commits a participant's Merkle signature. `l` is the cumulative weight before
 /// this slot; `fixed_repr` is `MerkleSignatureScheme::to_fixed_bytes()`.

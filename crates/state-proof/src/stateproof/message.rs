@@ -25,8 +25,12 @@ pub struct StateProofMessage {
     ///
     /// Wire codec key: `"v"`.
     pub voters_commitment: Sumhash512Digest,
-    /// 64-bit LE integer fixed-point approximation of the natural log of
-    /// `proven_weight` with 16 bits of precision: `ceil(2^16 * ln(proven_weight))`
+    /// Real number encoded as a fixed-point integer with 16-bit precision that 
+    /// represents the natural log of `proven_weight`
+    /// 
+    /// Formula: `ceil(2^16 * ln(proven_weight))`.
+    /// 
+    /// This number is stored inside a 64-bit LE integer for safety insurance and compatibility.
     /// 
     /// Becomes [ln_proven_weight](TrustAnchor::ln_proven_weight) for verifying the next State Proof.
     ///
@@ -186,8 +190,12 @@ pub struct TrustAnchor {
     /// [voters_commitment](StateProofMessage::voters_commitment) field.
     #[cfg_attr(feature = "serde", serde(with = "bytes64"))]
     pub part_commitment: Sumhash512Digest,
-    /// 64-bit LE integer fixed-point approximation of the natural log of
-    /// `proven_weight` with 16 bits of precision: `ceil(2^16 * ln(proven_weight))`
+    /// Real number encoded as a fixed-point integer with 16-bit precision that 
+    /// represents the natural log of `proven_weight`
+    /// 
+    /// Formula: `ceil(2^16 * ln(proven_weight))`.
+    /// 
+    /// This number is stored inside a 64-bit LE integer for safety insurance and compatibility.
     /// 
     /// Sourced from the **previous** `StateProof` message 
     /// [ln_proven_weight](StateProofMessage::ln_proven_weight) field.
