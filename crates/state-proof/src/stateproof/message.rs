@@ -7,38 +7,40 @@ use merkle::{Sumhash512Digest, SHA256_DIGEST_SIZE, SUMHASH512_DIGEST_SIZE};
 use crate::codec::{AlgorandMessagePack, DecodeError, MsgPackDecode, Reader};
 use super::{MessageHash, constants::DOMAIN_SP_MSG_HASH};
 
-/// The message that a State Proof attests to, covering one block interval.
+/// The message that a State Proof attests to, covering a 256-block interval.
 ///
-/// Decoded from the `StateProofMsg` field of the State Proof transaction.
+/// Decoded from the `message` field of the State Proof transaction.
+/// 
 /// Contains the block data being attested and the trust parameters for
 /// verifying the *next* State Proof interval.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StateProofMessage {
-    /// SHA-256 VcTree root over the 256 light block headers in this interval.
+    /// 256-bit `Sha256` hash digest vector commitment root on the block header array.
     ///
-    /// Codec key: `"b"`.
+    /// Wire codec key: `"b"`.
     pub block_headers_commitment: [u8; SHA256_DIGEST_SIZE],
-
-    /// Sumhash512 root of the participants VcTree for the *next* interval.
-    /// Becomes `TrustAnchor::part_commitment` for verifying the next State Proof.
+    /// 512-bit `Sumhash512` hash digest vector commitment root on the voters array.
     ///
-    /// Codec key: `"v"`.
+    /// Becomes [part_commitment](TrustAnchor::part_commitment) for verifying the next State Proof.
+    ///
+    /// Wire codec key: `"v"`.
     pub voters_commitment: Sumhash512Digest,
-
-    /// `ceil(2^16 · ln(proven_weight))` for the *next* interval.
-    /// Becomes `TrustAnchor::ln_proven_weight` for verifying the next State Proof.
+    /// 64-bit LE integer fixed-point approximation of the natural log of
+    /// `proven_weight` with 16 bits of precision: `ceil(2^16 * ln(proven_weight))`
+    /// 
+    /// Becomes [ln_proven_weight](TrustAnchor::ln_proven_weight) for verifying the next State Proof.
     ///
-    /// Codec key: `"P"`.
+    /// Wire codec key: `"P"`.
     pub ln_proven_weight: u64,
-
     /// First round covered by this interval.
     ///
-    /// Codec key: `"f"`.
+    /// Wire codec key: `"f"`.
     pub first_attested_round: u64,
-
-    /// Last round covered by this interval. Passed as `round` to `verify_state_proof`.
+    /// Last round covered by this interval. 
+    /// 
+    /// Passed as `round` input to `verify_state_proof`.
     ///
-    /// Codec key: `"l"`.
+    /// Wire codec key: `"l"`.
     pub last_attested_round: u64,
 }
 
@@ -48,10 +50,11 @@ impl StateProofMessage {
         Self::decode(bytes)
     }
 
-    /// Canonical msgpack encoding. Keys sorted in lexicographic order based on ASCII:
-    /// `P(80)`, `b(98)`, `f(102)`, `l(108)`, `v(118)`.
+    /// Encodes to Algorand canonical `MessagePack` bytes. 
     fn to_msgpack_bytes(&self) -> Vec<u8> {
         AlgorandMessagePack::new()
+            /* NOTE: Keys sorted in lexicographic order based on ASCII:
+            P(80), b(98), f(102), l(108), v(118). */
             .uint("P", self.ln_proven_weight)
             .bytes("b", &self.block_headers_commitment)
             .uint("f", self.first_attested_round)
@@ -60,10 +63,7 @@ impl StateProofMessage {
             .encode()
     }
 
-    /// Computes `SHA-256("spm" || canonical_msgpack(self))`.
-    ///
-    /// This is the 32-byte digest signed by participants' ephemeral Falcon keys,
-    /// passed as `msg_hash` internally by `verify_state_proof`.
+    /// Returns computed digest of: `SHA-256("spm" || canonical_msgpack(self))`.
     pub fn hash(&self) -> MessageHash {
         let encoded = self.to_msgpack_bytes();
         let mut h = Sha256::new();
@@ -72,9 +72,7 @@ impl StateProofMessage {
         Sha2Digest::finalize(h).into()
     }
     
-    /// Returns the zero-based leaf index of `round` in this interval's 256-block VcTree,
-    /// for use with `verify_block_header_commitment`. Returns `None` if `round` falls
-    /// before `first_attested_round` or beyond index 255.
+    /// Returns the leaf index (0–255) of `round` in a 256-block interval or `None` if out of range.
     pub fn block_index_for_round(&self, round: u64) -> Option<usize> {
         let idx = round.checked_sub(self.first_attested_round)? as usize;
         if idx > 255 { None } else { Some(idx) }
@@ -181,18 +179,23 @@ mod bytes64 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TrustAnchor {
-    /// Sumhash512 root of the current interval's participants VcTree.
-    /// Sourced from the *previous* `StateProofMessage::voters_commitment`.
+    /// 512-bit `Sumhash512` hash digest vector commitment root on the participants array
+    /// of the current `StateProof` interval.
+    ///
+    /// Sourced from the **previous** `StateProof` message 
+    /// [voters_commitment](StateProofMessage::voters_commitment) field.
     #[cfg_attr(feature = "serde", serde(with = "bytes64"))]
     pub part_commitment: Sumhash512Digest,
-
-    /// `ceil(2^16 · ln(proven_weight))` for the current interval.
-    /// Sourced from the *previous* `StateProofMessage::ln_proven_weight`.
+    /// 64-bit LE integer fixed-point approximation of the natural log of
+    /// `proven_weight` with 16 bits of precision: `ceil(2^16 * ln(proven_weight))`
+    /// 
+    /// Sourced from the **previous** `StateProof` message 
+    /// [ln_proven_weight](StateProofMessage::ln_proven_weight) field.
     pub ln_proven_weight: u64,
 }
 
 impl From<&StateProofMessage> for TrustAnchor {
-    /// Extracts the trust anchor for the *next* interval from this message.
+    /// Extracts the `TrustAnchor` for the **next** 256-block interval from this message.
     fn from(msg: &StateProofMessage) -> Self {
         Self {
             part_commitment: msg.voters_commitment,
@@ -205,7 +208,8 @@ impl From<&StateProofMessage> for TrustAnchor {
 mod tests {
     use super::*;
 
-    fn make_msg(first: u64, last: u64) -> StateProofMessage {
+    /// Dummy state proof message for structural testing.
+    fn dummy_sp_msg(first: u64, last: u64) -> StateProofMessage {
         StateProofMessage {
             block_headers_commitment: [1u8; SHA256_DIGEST_SIZE],
             voters_commitment: [2u8; SUMHASH512_DIGEST_SIZE],
@@ -217,32 +221,32 @@ mod tests {
 
     #[test]
     fn block_index_first_round() {
-        assert_eq!(make_msg(100, 355).block_index_for_round(100), Some(0));
+        assert_eq!(dummy_sp_msg(100, 355).block_index_for_round(100), Some(0));
     }
 
     #[test]
     fn block_index_last_round() {
-        assert_eq!(make_msg(100, 355).block_index_for_round(355), Some(255));
+        assert_eq!(dummy_sp_msg(100, 355).block_index_for_round(355), Some(255));
     }
 
     #[test]
     fn block_index_out_of_interval_high() {
-        assert_eq!(make_msg(100, 355).block_index_for_round(356), None);
+        assert_eq!(dummy_sp_msg(100, 355).block_index_for_round(356), None);
     }
 
     #[test]
     fn block_index_before_interval() {
-        assert_eq!(make_msg(100, 355).block_index_for_round(99), None);
+        assert_eq!(dummy_sp_msg(100, 355).block_index_for_round(99), None);
     }
 
     #[test]
     fn block_index_underflow_safe() {
-        assert_eq!(make_msg(1, 256).block_index_for_round(0), None);
+        assert_eq!(dummy_sp_msg(1, 256).block_index_for_round(0), None);
     }
 
     #[test]
     fn msgpack_roundtrip() {
-        let original = make_msg(59_999_745, 60_000_000);
+        let original = dummy_sp_msg(59_999_745, 60_000_000);
         let bytes = original.to_msgpack_bytes();
         let decoded = StateProofMessage::from_msgpack(&bytes).expect("decode failed");
         assert_eq!(original, decoded);
@@ -250,7 +254,7 @@ mod tests {
 
     #[test]
     fn trust_anchor_from_message() {
-        let msg = make_msg(0, 255);
+        let msg = dummy_sp_msg(0, 255);
         let anchor = TrustAnchor::from(&msg);
         assert_eq!(anchor.part_commitment, msg.voters_commitment);
         assert_eq!(anchor.ln_proven_weight, msg.ln_proven_weight);

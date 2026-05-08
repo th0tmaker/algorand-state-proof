@@ -50,7 +50,9 @@ pub(crate) const COIN_CHOICE_SEED_SIZE: usize =
 // ── Crypto primitives ─────────────────────────────────────────────────────────
 
 /// Identifies the suite of cryptographic primitives used in the State Proof 
-/// `MerkleSignatureScheme` (0 = Falcon (sig scheme) + Sumhash (hash function)).
+/// `MerkleSignatureScheme`
+/// 
+///  * `0 = Falcon (sig scheme) + Sumhash (hash function)`.
 pub(crate) const MSS_CRYPTO_SUITE_ID: u16 = 0;
 
 /// Coin generator version byte. Incrementing this changes coin selection,
@@ -61,9 +63,10 @@ pub(crate) const COIN_GENERATOR_VERSION: u8 = 0;
 pub(crate) const LN2_FIXED_POINT: u64 = 45427;
 
 // ── Hash domains: Sumhash512 ──────────────────────────────────────────────────
-// All VcTree leaves and internal nodes in the sig/part trees use Sumhash512.
-// Internal nodes use domain "MA" (merkle::MERKLE_INTERNAL_NODE).
-// DOMAIN_EMPTY_SLOT ("MB") is imported above from merkle::MERKLE_VC_BOTTOM_LEAF.
+
+/* NOTE: All VcTree leaves and internal nodes in the sig/part trees use Sumhash512.
+Internal nodes use domain "MA" (merkle::MERKLE_INTERNAL_NODE).
+DOMAIN_EMPTY_SLOT ("MB") is imported above from merkle::MERKLE_VC_BOTTOM_LEAF.*/
 
 /// **Participant VC leaf** (outer participants tree, root = `part_commitment`).
 ///

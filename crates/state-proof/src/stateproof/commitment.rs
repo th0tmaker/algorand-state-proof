@@ -44,7 +44,7 @@ use super::constants::{DOMAIN_LIGHT_BLOCK_HEADER, DOMAIN_TXN_LEAF};
 /// - `GET /v2/blocks/{round}/lightheader/proof`. Computes the VC tree path and outputs the proof, 
 ///   tree depth and the index position of the block within the tree.
 ///
-/// Note: Algod daemon does not provide a `LightBlockHeader` directly. It must be
+/// NOTE: Algod daemon does not provide a `LightBlockHeader` directly. It must be
 /// constructed locally by extracting and re-encoding the relevant fields
 /// from the block header response.
 /// 
@@ -96,8 +96,7 @@ impl LightBlockHeader {
 
         Which field is encoded depends on the consensus protocol version:
         newer protocol versions encode `block_hash` and omit `seed`,
-        while older versions encode `seed` and omit `block_hash`.
-        */
+        while older versions encode `seed` and omit `block_hash`. */
         let mut mp = AlgorandMessagePack::new();
 
         // If `seed` is NOT empty, encode it.
@@ -282,7 +281,7 @@ mod tests {
     use merkle::VcTree;
     use super::*;
 
-    /// Dummy block header for structural testing
+    /// Dummy block header for structural testing.
     fn dummy_block_header(round: u64) -> LightBlockHeader {
         LightBlockHeader {
             seed: [1u8; 32],

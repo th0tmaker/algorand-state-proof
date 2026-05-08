@@ -40,7 +40,7 @@ pub struct CoinChoiceSeed {
 }
 
 impl CoinChoiceSeed {
-    /// Serializes `CoinChoiceSeed` into a single flattened buffer of bytes with a specific fixed order,
+    /// Serializes `CoinChoiceSeed` into a single flattened buffer of bytes with a specific fixed order.
     ///
     /// Serialized layout:
     /// `b"spc" || version(u8) || part_commitment([u8; 64]) || ln_proven_weight(u64 LE) || sig_commitment([u8; 64]) || signed_weight(u64 LE) || message_hash([u8; 32])`
