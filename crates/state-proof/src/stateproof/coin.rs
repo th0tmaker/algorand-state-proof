@@ -8,11 +8,10 @@ use super::MessageHash;
 
 // ── Ln approximation ─────────────────────────────────────────────────────────
 
+/// Computes `ln_proven_weight` from `proven_weight`.
+/// 
 /// Returns `ceil(2^16 * ln(x))` as a fixed-point approximation of `ln(x)`,
-/// or `None` if `x` is zero.
-///
-/// Used to derive `ln_proven_weight` from `proven_weight` before constructing
-/// a `CoinChoiceSeed`.
+/// or `None` if `x` is zero. Required when constructing `CoinChoiceSeed`.
 pub fn ln_int_approximation(x: u64) -> Option<u64> {
     if x == 0 { return None; }
     // A `f64` has a 53-bit mantissa; inputs above 2^53 lose integer precision, which 
@@ -22,33 +21,32 @@ pub fn ln_int_approximation(x: u64) -> Option<u64> {
 }
 
 // ── CoinChoiceSeed ────────────────────────────────────────────────────────────
-
-/// The inputs fed into SHAKE256 to derive the randomness stream for coin flips.
 ///
-/// Serialized in a fixed binary layout (not msgpack) so that the encoding is
-/// compatible with Algorand's SNARK circuit prover.
-///
-/// Layout:
-/// `"spc" || version(1) || partCommitment(64) || lnProvenWeight(8 LE) || sigCommitment(64) || signedWeight(8 LE) || messageHash(32)`
+/// The input seed absorbed by [Shake256](keccak::Shake256) inside the `CoinGenerator`.
+/// A coin is used to pseudorandomly select which signatures get revealed during
+/// [StateProof](crate::StateProof) validation.
 pub struct CoinChoiceSeed {
-    /// The `Sumhash512Digest` root commitment of the participants tree.
+    /// 512-bit `Sumhash512` hash digest vector commitment root on the participant array.
     pub part_commitment: Sumhash512Digest,
-    /// `ceil(2^16 * ln(provenWeight))` — fixed-point ln approximation with 16 bits of precision.
+    /// 64-bit LE integer fixed-point approximation of the natural log of
+    /// `proven_weight` with 16 bits of precision: `ceil(2^16 * ln(proven_weight))`.
     pub ln_proven_weight: u64,
-    /// The `Sumhash512Digest` root commitment of the signatures tree.
+    /// 512-bit `Sumhash512` hash digest vector commitment root on the signature array
     pub sig_commitment: Sumhash512Digest,
-    /// Total stake weight that signed the message.
+    /// 64-bit LE integer representing the State Proof signed weight.
     pub signed_weight: u64,
-    /// SHA-256 hash of the message being attested to.
+    /// 256-bit `SHA-256` hash digest of the state proof message being attested to.
     pub message_hash: MessageHash,
 }
 
 impl CoinChoiceSeed {
-    /// Serializes `CoinChoiceSeed` into a single flattened buffer of bytes with a specific fixed order.
+    /// Serializes `CoinChoiceSeed` into a single flattened buffer of bytes with a specific fixed order,
+    ///
+    /// Serialized layout:
+    /// `b"spc" || version(u8) || part_commitment([u8; 64]) || ln_proven_weight(u64 LE) || sig_commitment([u8; 64]) || signed_weight(u64 LE) || message_hash([u8; 32])`
     fn to_bytes(&self) -> [u8; COIN_CHOICE_SEED_SIZE] {
         let mut out = [0u8; COIN_CHOICE_SEED_SIZE];
         let mut pos = 0;
-
         out[pos..pos + 3].copy_from_slice(DOMAIN_COIN_SEED); pos += 3;
         out[pos] = COIN_GENERATOR_VERSION; pos += 1;
         out[pos..pos + SUMHASH512_DIGEST_SIZE].copy_from_slice(&self.part_commitment); pos += SUMHASH512_DIGEST_SIZE;
@@ -56,7 +54,6 @@ impl CoinChoiceSeed {
         out[pos..pos + SUMHASH512_DIGEST_SIZE].copy_from_slice(&self.sig_commitment);  pos += SUMHASH512_DIGEST_SIZE;
         out[pos..pos + 8].copy_from_slice(&self.signed_weight.to_le_bytes()); pos += 8;
         out[pos..].copy_from_slice(&self.message_hash);
-
         out
     }
 }
@@ -67,13 +64,14 @@ impl CoinChoiceSeed {
 /// squeezing 64-bit chunks from a `Shake256` context seeded with `CoinChoiceSeed`.
 ///
 /// Uses rejection sampling to ensure a uniform distribution:
-/// threshold = `floor(2^64 / signed_weight) * signed_weight`.
+/// `threshold = floor(2^64 / signed_weight) * signed_weight`.
+///
 /// A sample is accepted only when it falls below the threshold, then
 /// returned as `sample % signed_weight`.
 #[derive(Debug)]
 pub struct CoinGenerator {
     /// The `Shake256` sponge construction extendable output function (XOF).
-    shake: Shake256,
+    xof: Shake256,
     /// Total stake weight of signers only.
     signed_weight: u64,
     /// Largest multiple of `signed_weight` that fits in a u64 — the rejection boundary.
@@ -82,7 +80,6 @@ pub struct CoinGenerator {
 
 impl CoinGenerator {
     /// Creates a new instance of `CoinGenerator` from a `CoinChoiceSeed`
-    /// by absorbing the serialized seed into `Shake256`.
     pub fn new(seed: &CoinChoiceSeed) -> Self {
         // Create a new instance of `Shake256`, absord the seed bytes and flip to squeeze mode.
         let mut xof = Shake256::new();
@@ -105,18 +102,26 @@ impl CoinGenerator {
         let k = (1u128 << u64::BITS) / signed_weight as u128;
         let threshold = k * signed_weight as u128;
 
-        // Wrap `shake`, `signed_weight` and `threshold` into the type and return
-        Self { shake: xof, signed_weight, threshold }
+        // Wrap `xof`, `signed_weight` and `threshold` into the type and return
+        Self { xof, signed_weight, threshold }
     }
 
-    /// Returns the next coin value uniformly distributed in `[0, signed_weight)`.
+    /// Generates the next unbiased “coin” index in the range `[0, signed_weight)`.
     ///
-    /// Squeezes 8 bytes from `Shake256`, rejects if ≥ threshold (rejection sampling),
-    /// and returns `sample % signed_weight`.
+    /// This uses `Shake256` randomness and rejection sampling to avoid modulo bias:
+    ///
+    /// 1. A 64-bit random sample is drawn from the XOF stream.
+    /// 2. The sample is accepted only if it lies in the largest multiple of
+    ///    `signed_weight` that fits within `u64` (the `threshold`).
+    /// 3. Once accepted, the sample is reduced with `sample % signed_weight`,
+    ///    which is unbiased due to the rejection step.
+    ///
+    /// Returns a uniformly distributed integer in `[0, signed_weight)`.
     pub fn next_coin(&mut self) -> u64 {
+        // Keep looping until we get an acceptable value.
         loop {
             let mut buf = [0u8; 8];
-            self.shake.squeeze(&mut buf);
+            self.xof.squeeze(&mut buf);
             let sample = u64::from_le_bytes(buf) as u128;
             if sample < self.threshold {
                 return (sample % self.signed_weight as u128) as u64;

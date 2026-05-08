@@ -231,9 +231,9 @@ pub fn verify_block_header_commitment(
 ///
 /// - `txn_sha256`: The digest of `SHA-256("TX" || canonical_msgpack(txn))`.
 /// 
-///   **Note**: Not to be mistaken with the digest of `SHA-512/256("TX" || msgpack(txn))`,
-///   which is the canonical way of computing the bytes that end up being `base32` encoded
-///   into a valid transaction id on Algorand.
+///   **Note**: Not to be mistaken with the digest of `SHA-512/256("TX" || canonical_msgpack(txn))`,
+///   which is the canonical way of computing the bytes that end up being `base32` encoded into a
+///   valid transaction id on Algorand.
 /// 
 ///   **Note2**: The transaction bytes must include `gh` (genesis hash) 
 ///   and `gen` (genesis ID), which block storage strips. 
