@@ -1,4 +1,4 @@
-// crates/state-proof/src/stateproof/verifier.rs
+// crates/state-proof/src/stateproof/verify.rs
 
 use core::fmt;
 use alloc::collections::BTreeMap;

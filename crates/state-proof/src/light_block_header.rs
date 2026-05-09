@@ -1,9 +1,9 @@
-// crates/state-proof/src/stateproof/commitment.rs
+// crates/state-proof/src/light_block_header.rs
 
 use merkle::{hash_obj, Hashable, MerkleHasher, Proof, Sha256, SHA256_DIGEST_SIZE};
 
 use crate::codec::{AlgorandMessagePack, DecodeError, MsgPackDecode, Reader};
-use super::constants::{DOMAIN_LIGHT_BLOCK_HEADER, DOMAIN_TXN_LEAF};
+use crate::stateproof::constants::{DOMAIN_LIGHT_BLOCK_HEADER, DOMAIN_TXN_LEAF};
 
 
 // ── LightBlockHeader ──────────────────────────────────────────────────────────

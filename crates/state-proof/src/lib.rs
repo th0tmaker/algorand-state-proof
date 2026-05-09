@@ -33,6 +33,7 @@
 extern crate alloc;
 
 mod codec;
+mod light_block_header;
 mod stateproof;
 
 // ── Re-exports from merkle ────────────────────────────────────────────────────
@@ -54,10 +55,12 @@ pub use algorand_falcon_keys::{
 // ── Codec error ───────────────────────────────────────────────────────────────
 pub use codec::DecodeError;
 
+// ── Light block header and downstream commitment verification ─────────────────
+pub use light_block_header::{LightBlockHeader, verify_block_header_commitment, verify_txn_commitment};
+
 // ── State proof types and verifier ───────────────────────────────────────────
 pub use stateproof::{
     MessageHash,
-    LightBlockHeader, verify_block_header_commitment, verify_txn_commitment,
     StateProofMessage, TrustAnchor,
     MerkleVerifier, MerkleSignatureScheme,
     SigSlotCommit, Participant, Reveal,
