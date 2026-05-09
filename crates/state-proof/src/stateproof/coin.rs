@@ -1,6 +1,6 @@
 // crates/state-proof/src/stateproof/coin.rs
 
-use keccak::Shake256;
+use xof::Shake256;
 use merkle::{Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
 
 use super::constants::{COIN_CHOICE_SEED_SIZE, COIN_GENERATOR_VERSION, DOMAIN_COIN_SEED};
@@ -22,7 +22,7 @@ pub fn ln_int_approximation(x: u64) -> Option<u64> {
 
 // ── CoinChoiceSeed ────────────────────────────────────────────────────────────
 ///
-/// The input seed absorbed by [Shake256](keccak::Shake256) inside the `CoinGenerator`.
+/// The input seed absorbed by [Shake256](xof::Shake256) inside the `CoinGenerator`.
 /// A coin is used to pseudorandomly select which signatures get revealed during
 /// [StateProof](crate::StateProof) validation.
 pub struct CoinChoiceSeed {

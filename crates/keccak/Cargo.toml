@@ -1,6 +1,0 @@
-[package]
-name = "keccak"
-version = "0.1.0"
-edition = "2024"
-description = "Internal SHAKE256 / Keccak-f[1600] implementation."
-license = "MIT"

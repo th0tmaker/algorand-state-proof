@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-use keccak::{Shake256, Zeroize};
+use xof::{Shake256, Zeroize};
 
 // ── Sumhash constants ─────────────────────────────────────────────────────────
 
@@ -51,7 +51,7 @@ fn sum_byte(cols: &[u64; 8], byte: u8) -> u64 {
 
 // ── Sumhash ───────────────────────────────────────────────────────────────────
 
-/// Subset-sum hash over an `n × m`-bit matrix derived from [keccak::Shake256]
+/// Subset-sum hash over an `n × m`-bit matrix derived from [xof::Shake256]
 /// via `SHAKE256(u=64 || n || m || seed)`.
 ///
 /// A lookup table is built at construction so each compression costs
@@ -91,7 +91,7 @@ impl Drop for Sumhash {
 }
 
 impl Sumhash {
-    /// Absorbs `u=64 || n || m || seed` into [keccak::Shake256] and streams
+    /// Absorbs `u=64 || n || m || seed` into [xof::Shake256] and streams
     /// the output directly into a lookup table — 8 `u64` words per byte position,
     /// 256 sums each. Returns a zeroed sponge ready to accept input.
     pub(crate) fn new(n: u16, m: u16, seed: &[u8]) -> Self {
@@ -328,7 +328,7 @@ impl Sumhash {
 /// `Sumhash` instantiated with Algorand's fixed parameters: `n=8` output words,
 /// `m=1024`-bit input block, `seed=b"Algorand"` for domain separation.
 ///
-/// The matrix derived from [keccak::Shake256] is 8 × 1024 `u64` entries;
+/// The matrix derived from [xof::Shake256] is 8 × 1024 `u64` entries;
 /// each 64-byte message block is compressed with the 64-byte chaining value
 /// to produce 8 × 64-bit words = 512 bits of output.
 #[derive(Clone, PartialEq, Eq)]

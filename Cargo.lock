@@ -15,11 +15,11 @@ name = "algorand-state-proof"
 version = "0.1.0"
 dependencies = [
  "algorand-falcon-keys",
- "keccak",
  "merkle",
  "serde",
  "serde_json",
  "sha2",
+ "xof",
 ]
 
 [[package]]
@@ -102,10 +102,6 @@ name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
-
-[[package]]
-name = "keccak"
-version = "0.1.0"
 
 [[package]]
 name = "libc"
@@ -209,7 +205,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 name = "sumhash"
 version = "0.1.0"
 dependencies = [
- "keccak",
+ "xof",
 ]
 
 [[package]]
@@ -234,6 +230,10 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "xof"
+version = "0.1.0"
 
 [[package]]
 name = "zmij"

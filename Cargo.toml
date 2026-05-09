@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/keccak",
+    "crates/xof",
     "crates/sumhash",
     "crates/merkle",
     "crates/state-proof",

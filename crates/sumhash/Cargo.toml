@@ -6,4 +6,4 @@ description = "Algorand Sumhash512 — subset-sum hash function built on SHAKE25
 license = "MIT"
 
 [dependencies]
-keccak = { path = "../keccak" }
+xof = { path = "../xof" }

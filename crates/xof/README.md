@@ -1,4 +1,4 @@
-# keccak
+# xof
 
 SHAKE-256 extendable-output function (XOF) serving two roles in the Algorand state proof stack: seeding Sumhash512, the primary Merkle tree hash function, and driving the pseudorandom coin generation inside the State Proof verification protocol.
 
@@ -13,14 +13,14 @@ This crate provides a minimal, dependency-free SHAKE-256 implementation built di
 ## Usage
 
 ```rust
-use keccak::Shake256;
+use xof::Shake256;
 
-let mut xof = Shake256::new();
-xof.absorb(b"seed material");
-xof.flip(); // switch from absorb to squeeze mode
+let mut shake = Shake256::new();
+shake.absorb(b"seed material");
+shake.flip(); // switch from absorb to squeeze mode
 
 let mut out = [0u8; 8];
-xof.squeeze(&mut out); // squeeze 8 bytes of output
+shake.squeeze(&mut out); // squeeze 8 bytes of output
 ```
 
 Multiple `squeeze` calls can be made after a single `flip`, producing a pseudorandom stream.
@@ -30,7 +30,7 @@ Multiple `squeeze` calls can be made after a single `flip`, producing a pseudora
 The crate also exports a `Zeroize` trait with implementations for common types:
 
 ```rust
-use keccak::Zeroize;
+use xof::Zeroize;
 
 let mut secret = [0u8; 32];
 // ... use secret ...
