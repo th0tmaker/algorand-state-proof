@@ -7,7 +7,7 @@ use algorand_falcon_keys::PublicKey;
 use merkle::{hash_obj, Hashable, MerkleHasher, Sumhash512, Sumhash512Digest};
 
 use super::{
-    CoinChoiceSeed, CoinGenerator, MessageHash, MerkleSignatureScheme, Participant, Reveal, SigSlotCommit, StateProof, ln_int_approximation,
+    CoinChoiceSeed, CoinGenerator, MessageHash, MerkleSignatureScheme, MerkleVerifier, Participant, Reveal, SigSlotCommit, StateProof, ln_int_approximation,
     constants::{DOMAIN_EMPTY_SLOT, DOMAIN_EPHEMERAL_KEY, DOMAIN_PARTICIPANT, DOMAIN_SIG_SLOT, LN2_FIXED_POINT, MSS_CRYPTO_SUITE_ID, STRENGTH_TARGET, SP_VC_MAX_DEPTH},
     message::{StateProofMessage, TrustAnchor}
 };
@@ -66,9 +66,9 @@ impl fmt::Display for VerifyError {
             Self::VcProofFailed { position } =>
                 write!(f, "ephemeral key VC proof failed at position {position}"),
             Self::FalconVerifyFailed { position } =>
-                write!(f, "Falcon signature verification failed at position {position}"),
+                write!(f, "signature verification failed at position {position}"),
             Self::SigConversionFailed { position } =>
-                write!(f, "failed signature conversion to CT format at position {position}"),
+                write!(f, "signature conversion to CT format failed at position {position}"),
             Self::CoinOutOfRange { index, position, coin } =>
                 write!(f, "coin {coin} at index {index} (position {position}) is outside the participant's weight range"),
             Self::WeightRangeOverflow { position } =>
@@ -83,7 +83,9 @@ impl core::error::Error for VerifyError {}
 
 // ── Leaf-hash helpers ─────────────────────────────────────────────────────────
 
-/// Wraps a [`Participant`] for hashing as a leaf in the participants [`merkle::VcTree`].
+/// Wraps a [`Participant`]'s stake weight and key tree root into a VC leaf
+/// representing the outer participants tree — the tree whose root is
+/// [`TrustAnchor::part_commitment`].
 ///
 /// Domain tag `"spp"`. See [`specs`](super::specs) for the full hash preimage.
 struct ParticipantLeaf<'a>(&'a Participant);
@@ -98,24 +100,26 @@ impl Hashable for ParticipantLeaf<'_> {
     }
 }
 
-/// Wraps one slot in a [Participant]'s inner ephemeral key rotation schedule for leaf hashing.
+/// Returns the leaf digest of `p` for batch VC proof verification against `part_commitment`.
+fn hash_participant_leaf(h: &mut Sumhash512, p: &Participant) -> Sumhash512Digest {
+    hash_obj(h, &ParticipantLeaf(p))
+}
+
+/// Wraps an ephemeral `verifying_key` and its epoch start `round` into a VC leaf
+/// representing the inner ephemeral key tree — the tree whose root is
+/// [`MerkleVerifier::commitment`], committing to all of a participant's ephemeral
+/// FALCON public keys over their participation period.
 ///
-/// The state proof uses a two-level [merkle::VcTree] structure:
-/// * Outer tree (root = `part_commitment`): one [ParticipantLeaf] per participant,
-///   containing the participant's weight and the root of their inner key tree.
-/// * Inner tree (root = `participant.pk.commitment`): one [CommittablePK] per key
-///   rotation window, containing the ephemeral `PublicKey` valid for that window.
-///
-/// `round` is the start of the current lifetime window (`first_round_in_key_lifetime`),
-/// not the exact round being proven — the same key covers the whole window.
+/// `round` is the epoch start (`key_epoch_start`), not the exact round —
+/// the same key covers the full `key_lifetime` epoch.
 ///
 /// Domain tag `"KP"`. See [`specs`](super::specs) for the full hash preimage.
-struct CommittablePK<'a> {
+struct EphemeralKeyLeaf<'a> {
     verifying_key: &'a PublicKey,
     round: u64,
 }
 
-impl Hashable for CommittablePK<'_> {
+impl Hashable for EphemeralKeyLeaf<'_> {
     fn hash_into<H: MerkleHasher>(&self, h: &mut H) {
         h.update(DOMAIN_EPHEMERAL_KEY);
         h.update(&MSS_CRYPTO_SUITE_ID.to_le_bytes());
@@ -124,14 +128,7 @@ impl Hashable for CommittablePK<'_> {
     }
 }
 
-
-/// Returns the leaf digest of `p` for batch VC proof verification against `part_commitment`.
-fn hash_participant_leaf(h: &mut Sumhash512, p: &Participant) -> Sumhash512Digest {
-    hash_obj(h, &ParticipantLeaf(p))
-}
-
-/// Wraps the empty-slot padding constant for hashing.
-/// When a participant did not sign, the sig tree leaf is `Hash("MB")`.
+/// Marker type for hashing an empty signature slot (`"MB"`, no payload).
 struct EmptySigLeaf;
 impl Hashable for EmptySigLeaf {
     fn hash_into<H: MerkleHasher>(&self, h: &mut H) {
@@ -139,87 +136,58 @@ impl Hashable for EmptySigLeaf {
     }
 }
 
-/// Returns true if the sig slot carries no real signature (participant did not sign).
-/// A minimal 2-byte compressed sig (header + salt only, zero Falcon data) signals empty.
-fn sig_slot_is_empty(slot: &SigSlotCommit) -> bool {
-    slot.mss.signature.as_bytes().len() <= 2
-}
-
 /// Computes the Sumhash512 leaf digest for `slot` in the sig VC tree.
 ///
-/// Empty slots (participant did not sign) → `Hash("MB")` (the VC bottom leaf).
-/// Non-empty slots → `Hash("sps" || L(8 LE) || GetFixedLengthHashableRepresentation(sig))`.
-///
-/// Feeds bytes directly into the hasher — no intermediate heap allocation.
-fn hash_sig_slot_leaf(h: &mut Sumhash512, pos: u64, slot: &SigSlotCommit) -> Result<Sumhash512Digest, VerifyError> {
-    if sig_slot_is_empty(slot) {
+/// Empty slots → `Hash("MB")`; non-empty slots → `Hash("sps" || ...)`.
+/// See [`specs`](super::specs) for the full preimage.
+fn hash_sig_slot_leaf(h: &mut Sumhash512, pos: u64, sig_slot: &SigSlotCommit) -> Result<Sumhash512Digest, VerifyError> {
+    if sig_slot.is_empty() {
         return Ok(hash_obj(h, &EmptySigLeaf));
     }
 
-    let sig_repr = slot.mss.to_bytes()
+    let mss_bytes = sig_slot.mss.to_bytes()
         .map_err(|_| VerifyError::SigConversionFailed { position: pos })?;
 
     h.update(DOMAIN_SIG_SLOT);
-    h.update(&slot.l.to_le_bytes());
-    h.update(&sig_repr);
+    h.update(&sig_slot.l.to_le_bytes());
+    h.update(&mss_bytes);
     Ok(h.finalize_reset())
-}
-
-// ── Round alignment ───────────────────────────────────────────────────────────
-
-/// Returns the latest round ≤ `round` that is a multiple of `key_lifetime`.
-///
-/// An ephemeral key at VC index `i` covers all rounds in the window
-/// `[first_round, first_round + key_lifetime)`, so its VC leaf is always hashed
-/// with `first_round` regardless of the specific round being proven.
-fn first_round_in_key_lifetime(round: u64, key_lifetime: u64) -> u64 {
-    if key_lifetime == 0 { return round; }
-    round - (round % key_lifetime)
 }
 
 // ── Per-reveal verification ───────────────────────────────────────────────────
 
 /// Verifies a single `MerkleSignatureScheme` in two steps:
 /// 1. VC proof — proves the ephemeral key is committed at `mss.vc_index` in the participant's key tree.
-/// 2. Falcon — proves the ephemeral key signed `msg_hash` for this round.
+/// 2. Falcon — proves the ephemeral key signed `message_hash` for this round.
 fn verify_merkle_sig_scheme(
     h: &mut Sumhash512,
     mss: &MerkleSignatureScheme,
-    commitment: &Sumhash512Digest,
+    verifier: &MerkleVerifier,
     round: u64,
-    key_lifetime: u64,
-    msg_hash: &MessageHash,
+    message_hash: &MessageHash,
     pos: u64,
 ) -> Result<(), VerifyError> {
-    // Align to the lifetime window boundary; the key was committed at this round.
-    let valid_round = first_round_in_key_lifetime(round, key_lifetime);
+    let leaf = hash_obj(h, &EphemeralKeyLeaf {
+        verifying_key: &mss.verifying_key,
+        round: verifier.key_epoch_start(round),
+    });
 
-    // Reconstruct the expected VC leaf hash for the ephemeral key at its committed round.
-    let leaf = hash_obj(h, &CommittablePK { verifying_key: &mss.verifying_key, round: valid_round });
-
-    // Verify the key is committed at `vc_index` in the participant's key tree.
-    // Safe: vc_index is bounded by `key_lifetime`, a small protocol value well within usize.
-    if !mss.proof.verify_vc(leaf, mss.vc_index as usize, commitment) {
+    if !mss.proof.verify_vc(leaf, mss.vc_index as usize, &verifier.commitment) {
         return Err(VerifyError::VcProofFailed { position: pos });
     }
 
-    // Verify the Falcon signature over the attested message against the ephemeral key.
     mss.verifying_key
-        .verify_compressed(&mss.signature, msg_hash)
+        .verify_compressed(&mss.signature, message_hash)
         .map_err(|_| VerifyError::FalconVerifyFailed { position: pos })
 }
 
 // ── Public verifier ───────────────────────────────────────────────────────────
 
-/// Verifies a `StateProof` against trusted parameters.
+/// Verifies `state_proof` against the trusted `anchor` and returns
+/// the [`TrustAnchor`] for the next interval on success.
 ///
-/// On success returns the `TrustAnchor` for the *next* interval, extracted from
-/// `message`. Chain calls by passing each returned anchor as the next `anchor`.
-///
-/// ### Parameters
-/// * `state_proof` — decoded from the State Proof transaction wire bytes.
-/// * `message`     — the `StateProofMessage` from the same transaction.
-/// * `anchor`      — trusted `part_commitment` and `ln_proven_weight` from the *previous* interval's `StateProofMessage`.
+/// `anchor` must be sourced from the previous interval's [`StateProofMessage`].
+/// Pass each returned anchor to the following call to chain verification across intervals.
 pub fn verify_state_proof(
     state_proof: &StateProof,
     message: &StateProofMessage,
@@ -228,7 +196,8 @@ pub fn verify_state_proof(
     let part_commitment = &anchor.part_commitment;
     let ln_proven_weight = anchor.ln_proven_weight;
     let round = message.last_attested_round;
-    let msg_hash = message.hash();
+    let message_hash = message.hash();
+
     // ── 1. Reject trees that exceed the protocol depth limit ──────────────────
     if state_proof.sig_proofs.tree_depth > SP_VC_MAX_DEPTH {
         return Err(VerifyError::TreeDepthTooLarge {
@@ -250,20 +219,23 @@ pub fn verify_state_proof(
         return Err(VerifyError::SignedWeightTooLow);
     }
     // Full strength inequality: numReveals · (ln_signed − ln_proven_weight) ≥ strength_target · ln2
-    // Both sides fit in u128 (reveals ≤ 2^20, denom ≤ 2^22 → product ≤ 2^42).
-    let denom = ln_signed - ln_proven_weight;
-    let lhs = state_proof.positions_to_reveal.len() as u128 * denom as u128;
+    // Both sides fit in u128 (reveals ≤ 2^20, ln_weight_gap ≤ 2^22 → product ≤ 2^42).
+    let ln_weight_gap = ln_signed - ln_proven_weight;
+    let lhs = state_proof.positions_to_reveal.len() as u128 * ln_weight_gap as u128;
     let rhs = STRENGTH_TARGET as u128 * LN2_FIXED_POINT as u128;
     if lhs < rhs {
         return Err(VerifyError::InsufficientReveals);
     }
 
     // ── 3. Build reveal index; reject duplicate reveal positions ─────────────
+    // reveals is stored as Vec<(u64, Reveal)> rather than BTreeMap for two reasons:
+    // - Step 4 iterates it in wire order to verify each reveal (salt, VC proof, Falcon).
+    // - The length comparison below gives duplicate detection for free: BTreeMap
+    //   silently overwrites duplicate keys, so a smaller map means malformed wire data.
     // positions_to_reveal can contain repeated values (multiple coins landing on the
     // same heavy participant), so reveals.len() ≤ positions_to_reveal.len() is normal.
     let reveal_map: BTreeMap<u64, &Reveal> =
         state_proof.reveals.iter().map(|(pos, r)| (*pos, r)).collect();
-    // BTreeMap deduplicates by key; a smaller map means the wire data had duplicate positions.
     if reveal_map.len() != state_proof.reveals.len() {
         return Err(VerifyError::DuplicateRevealPosition);
     }
@@ -272,44 +244,38 @@ pub fn verify_state_proof(
     // A single Sumhash512 context is shared across all calls; `hash_obj`
     // resets the hasher internally so each call is independent.
     let mut h = Sumhash512::new();
-    let mut sig_elems: Vec<(usize, Sumhash512Digest)> =
+    let mut sig_leaves: Vec<(usize, Sumhash512Digest)> =
         Vec::with_capacity(state_proof.reveals.len());
-    let mut part_elems: Vec<(usize, Sumhash512Digest)> =
+    let mut part_leaves: Vec<(usize, Sumhash512Digest)> =
         Vec::with_capacity(state_proof.reveals.len());
 
     for &(pos, ref reveal) in &state_proof.reveals {
-        let empty = sig_slot_is_empty(&reveal.sig_slot);
-
-        // All non-empty reveals must share the same salt version.
-        if !empty && reveal.sig_slot.mss.salt_version() != state_proof.mss_salt_version {
-            return Err(VerifyError::SaltVersionMismatch { position: pos });
-        }
-
-        // Empty slots (participant did not sign) skip Falcon+VC proof — their sig leaf is Hash("MB").
-        if !empty {
+        // Empty slots (participant did not sign) skip salt check and Falcon+VC proof.
+        if !reveal.sig_slot.is_empty() {
+            if reveal.sig_slot.mss.salt_version() != state_proof.mss_salt_version {
+                return Err(VerifyError::SaltVersionMismatch { position: pos });
+            }
             verify_merkle_sig_scheme(
                 &mut h,
                 &reveal.sig_slot.mss,
-                &reveal.participant.pk.commitment,
+                &reveal.participant.pk,
                 round,
-                reveal.participant.pk.key_lifetime,
-                &msg_hash,
+                &message_hash,
                 pos,
             )?;
         }
 
-        // Safe: tree positions are bounded by tree depth ≤ 20 (< 2^20), well within usize on all platforms.
-        sig_elems.push((pos as usize, hash_sig_slot_leaf(&mut h, pos, &reveal.sig_slot)?));
-        part_elems.push((pos as usize, hash_participant_leaf(&mut h, &reveal.participant)));
+        sig_leaves.push((pos as usize, hash_sig_slot_leaf(&mut h, pos, &reveal.sig_slot)?));
+        part_leaves.push((pos as usize, hash_participant_leaf(&mut h, &reveal.participant)));
     }
 
     // ── 5. Batch VC proof for the signature commitment ────────────────────────
-    if !state_proof.sig_proofs.verify_batch_vc(&sig_elems, &state_proof.sig_commitment) {
+    if !state_proof.sig_proofs.verify_batch_vc(&sig_leaves, &state_proof.sig_commitment) {
         return Err(VerifyError::SigProofFailed);
     }
 
     // ── 6. Batch VC proof for the participant commitment ──────────────────────
-    if !state_proof.part_proofs.verify_batch_vc(&part_elems, part_commitment) {
+    if !state_proof.part_proofs.verify_batch_vc(&part_leaves, part_commitment) {
         return Err(VerifyError::PartProofFailed);
     }
 
@@ -319,28 +285,26 @@ pub fn verify_state_proof(
         ln_proven_weight,
         sig_commitment: state_proof.sig_commitment,
         signed_weight: state_proof.signed_weight,
-        message_hash: msg_hash,
+        message_hash,
     };
-    
+
     let mut coin_gen = CoinGenerator::new(&seed);
 
     for (i, &pos) in state_proof.positions_to_reveal.iter().enumerate() {
-        // MissingReveal fires if a coin lands on a position that has no corresponding reveal entry.
         let reveal = reveal_map.get(&pos).copied()
             .ok_or(VerifyError::MissingReveal { position: pos })?;
         let coin = coin_gen.next_coin();
-        let l     = reveal.sig_slot.l;
-        let upper = l.checked_add(reveal.participant.weight)
+        let lower = reveal.sig_slot.l;
+        let upper = lower.checked_add(reveal.participant.weight)
             .ok_or(VerifyError::WeightRangeOverflow { position: pos })?;
-        
-        if coin < l || coin >= upper {
+
+        if !(lower..upper).contains(&coin) {
             return Err(VerifyError::CoinOutOfRange { index: i, position: pos, coin });
         }
     }
 
     Ok(TrustAnchor::from(message))
 }
-
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -349,9 +313,8 @@ mod tests {
     use super::{
         verify_state_proof, VerifyError,
         hash_sig_slot_leaf, hash_participant_leaf,
-        first_round_in_key_lifetime,
     };
-    use crate::stateproof::{Reveal, StateProof};
+    use crate::stateproof::{MerkleVerifier, Reveal, StateProof};
     use crate::stateproof::message::{StateProofMessage, TrustAnchor};
     use merkle::{Proof, Sumhash512, SUMHASH512_DIGEST_SIZE};
     extern crate std;
@@ -463,7 +426,7 @@ mod tests {
         let sig_leaf  = hash_sig_slot_leaf(&mut h, 0, &reveal.sig_slot).unwrap();
         let part_leaf = hash_participant_leaf(&mut h, &reveal.participant);
 
-        sp.reveals        = vec![(0, reveal)];
+        sp.reveals = vec![(0, reveal)];
         sp.sig_commitment = sig_leaf;
         let anchor = TrustAnchor { part_commitment: part_leaf, ln_proven_weight: 0 };
 
@@ -497,36 +460,40 @@ mod tests {
         );
     }
 
-    // ── first_round_in_key_lifetime ───────────────────────────────────────────
+    // ── MerkleVerifier::key_epoch_start ─────────────────────────────────────
+
+    fn mv(key_lifetime: u64) -> MerkleVerifier {
+        MerkleVerifier { key_lifetime, ..MerkleVerifier::default() }
+    }
 
     #[test]
-    fn first_round_key_lifetime_zero_returns_round() {
+    fn key_epoch_start_zero_lifetime_returns_round() {
         // key_lifetime=0 special case: returns round unchanged.
-        assert_eq!(first_round_in_key_lifetime(0, 0), 0);
-        assert_eq!(first_round_in_key_lifetime(999, 0), 999);
-        assert_eq!(first_round_in_key_lifetime(u64::MAX, 0), u64::MAX);
+        assert_eq!(mv(0).key_epoch_start(0), 0);
+        assert_eq!(mv(0).key_epoch_start(999), 999);
+        assert_eq!(mv(0).key_epoch_start(u64::MAX), u64::MAX);
     }
 
     #[test]
-    fn first_round_key_lifetime_exact_multiple() {
-        assert_eq!(first_round_in_key_lifetime(256, 256), 256);
-        assert_eq!(first_round_in_key_lifetime(512, 256), 512);
+    fn key_epoch_start_exact_multiple() {
+        assert_eq!(mv(256).key_epoch_start(256), 256);
+        assert_eq!(mv(256).key_epoch_start(512), 512);
     }
 
     #[test]
-    fn first_round_key_lifetime_mid_window() {
-        // Rounds 0–255 all map to window start 0.
-        assert_eq!(first_round_in_key_lifetime(0, 256), 0);
-        assert_eq!(first_round_in_key_lifetime(1, 256), 0);
-        assert_eq!(first_round_in_key_lifetime(255, 256), 0);
-        // Round 356 is in window [256, 512); maps to 256.
-        assert_eq!(first_round_in_key_lifetime(256 + 100, 256), 256);
+    fn key_epoch_start_mid_window() {
+        // Rounds 0–255 all map to epoch start 0.
+        assert_eq!(mv(256).key_epoch_start(0), 0);
+        assert_eq!(mv(256).key_epoch_start(1), 0);
+        assert_eq!(mv(256).key_epoch_start(255), 0);
+        // Round 356 is in epoch [256, 512); maps to 256.
+        assert_eq!(mv(256).key_epoch_start(256 + 100), 256);
     }
 
     #[test]
-    fn first_round_key_lifetime_one() {
+    fn key_epoch_start_lifetime_one() {
         // key_lifetime=1: every round is its own window start.
-        assert_eq!(first_round_in_key_lifetime(0, 1), 0);
-        assert_eq!(first_round_in_key_lifetime(u64::MAX, 1), u64::MAX);
+        assert_eq!(mv(1).key_epoch_start(0), 0);
+        assert_eq!(mv(1).key_epoch_start(u64::MAX), u64::MAX);
     }
 }

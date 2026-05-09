@@ -99,6 +99,18 @@ pub struct MerkleVerifier {
     pub key_lifetime: u64,
 }
 
+impl MerkleVerifier {
+    /// Returns the start of the key epoch containing `round`.
+    ///
+    /// Snaps `round` down to the nearest multiple of `key_lifetime` — the epoch
+    /// boundary at which the corresponding ephemeral key was generated. This is
+    /// the round encoded in the `EphemeralKeyLeaf` when verifying the VC Merkle proof.
+    pub(crate) fn key_epoch_start(&self, round: u64) -> u64 {
+        if self.key_lifetime == 0 { return round; }
+        round - (round % self.key_lifetime)
+    }
+}
+
 impl Default for MerkleVerifier {
     fn default() -> Self {
         Self { commitment: [0u8; SUMHASH512_DIGEST_SIZE], key_lifetime: 0 }
@@ -253,6 +265,14 @@ pub struct SigSlotCommit {
     ///
     /// Wire codec key: `"l"`.
     pub l: u64,
+}
+
+impl SigSlotCommit {
+    /// Returns `true` if the participant did not sign — indicated by a minimal
+    /// 2-byte compressed signature (header + salt only, no Falcon data).
+    pub(crate) fn is_empty(&self) -> bool {
+        self.mss.signature.as_bytes().len() <= 2
+    }
 }
 
 impl MsgPackDecode for SigSlotCommit {
