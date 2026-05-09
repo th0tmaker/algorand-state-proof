@@ -170,12 +170,12 @@ The `hashtype=sha256` parameter is required for transaction proofs — the defau
 
 ## Cryptographic primitives
 
-| Primitive | Used for |
-|---|---|
-| Falcon-1024 (post-quantum) | Ephemeral signature verification in each reveal |
-| Sumhash512 (post-quantum) | Participant and signature VcTree leaf hashing |
-| SHAKE-256 | Pseudorandom coin generation for reveal selection |
-| SHA-256 | Block header and transaction VcTree leaf hashing |
+| Primitive | Role | Commits to |
+|---|---|---|
+| Falcon-1024 (post-quantum) | Ephemeral signature verification | Each participant's signature over the `MessageHash` |
+| Sumhash512 (post-quantum) | Participant and signature VC trees | Participant stake + ephemeral key tree root; signature slot data |
+| SHAKE-256 | Pseudorandom coin generation | Proof parameters → stream of positions to reveal |
+| SHA-256 | Block header and transaction VC trees | Individual block headers in the interval; individual transactions in each block |
 
 ## Optional: serde feature
 

@@ -3,6 +3,7 @@
 mod coin;
 pub(crate) mod constants;
 mod message;
+pub(crate) mod specs;
 mod verify;
 
 pub use message::{StateProofMessage, TrustAnchor};
@@ -172,10 +173,8 @@ impl Default for MerkleSignatureScheme {
 }
 
 impl MerkleSignatureScheme {
-    /// Serializes `MerkleSignatureScheme` into a single flattened buffer of bytes with a specific fixed order.
-    ///
-    /// Serialized layout:
-    /// `b"sps" || l(u64 LE) || MerkleSignatureScheme([u8; 4366])`
+    /// Returns the fixed-length binary representation used as the payload in the `"sps"` sig slot leaf.
+    /// See [`specs`](stateproof::specs) for the full layout.
     pub(crate) fn to_bytes(&self) -> Result<[u8; MERKLE_SIG_SCHEME_FIXED_REPR_SIZE], algorand_falcon_keys::Error> {
         // Convert Falcon signature from compressed to constant-time (ct) format.
         let ct = self.signature.to_ct()?;

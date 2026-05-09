@@ -83,11 +83,9 @@ impl core::error::Error for VerifyError {}
 
 // ── Leaf-hash helpers ─────────────────────────────────────────────────────────
 
-/// Wraps a [Participant] for hashing as a leaf in the participants [merkle::VcTree].
-/// 
-/// Domain tag `"spp"` (state-proof participant). 
-/// 
-/// Layout: `weight(8) || key_lifetime(8) || commitment(64)`.
+/// Wraps a [`Participant`] for hashing as a leaf in the participants [`merkle::VcTree`].
+///
+/// Domain tag `"spp"`. See [`specs`](super::specs) for the full hash preimage.
 struct ParticipantLeaf<'a>(&'a Participant);
 
 impl Hashable for ParticipantLeaf<'_> {
@@ -111,7 +109,7 @@ impl Hashable for ParticipantLeaf<'_> {
 /// `round` is the start of the current lifetime window (`first_round_in_key_lifetime`),
 /// not the exact round being proven — the same key covers the whole window.
 ///
-/// Domain tag `"KP"`. Layout: `crypto_suite_id(2) || round(8) || pubkey(1793)`.
+/// Domain tag `"KP"`. See [`specs`](super::specs) for the full hash preimage.
 struct CommittablePK<'a> {
     verifying_key: &'a PublicKey,
     round: u64,

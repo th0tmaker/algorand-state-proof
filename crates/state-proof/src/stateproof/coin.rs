@@ -45,11 +45,8 @@ pub struct CoinChoiceSeed {
 }
 
 impl CoinChoiceSeed {
-    /// Serializes `CoinChoiceSeed` into a single flattened buffer of bytes with a specific fixed order.
-    ///
-    /// Serialized layout:
-    /// `b"spc" || version(u8) || part_commitment([u8; 64]) || ln_proven_weight(u64 LE) ||
-    /// sig_commitment([u8; 64]) || signed_weight(u64 LE) || message_hash([u8; 32])`
+    /// Serializes `CoinChoiceSeed` into a fixed-order byte buffer.
+    /// See [`specs`](super::specs) for the full layout.
     fn to_bytes(&self) -> [u8; COIN_CHOICE_SEED_SIZE] {
         let mut out = [0u8; COIN_CHOICE_SEED_SIZE];
         let mut pos = 0;
