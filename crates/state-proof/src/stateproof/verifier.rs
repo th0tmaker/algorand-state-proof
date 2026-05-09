@@ -94,7 +94,7 @@ impl Hashable for ParticipantLeaf<'_> {
     fn hash_into<H: MerkleHasher>(&self, h: &mut H) {
         let p = self.0;
         h.update(DOMAIN_PARTICIPANT);
-        h.update(&p.signed_weight.to_le_bytes());
+        h.update(&p.weight.to_le_bytes());
         h.update(&p.pk.key_lifetime.to_le_bytes());
         h.update(&p.pk.commitment);
     }
@@ -144,7 +144,7 @@ impl Hashable for EmptySigLeaf {
 /// Returns true if the sig slot carries no real signature (participant did not sign).
 /// A minimal 2-byte compressed sig (header + salt only, zero Falcon data) signals empty.
 fn sig_slot_is_empty(slot: &SigSlotCommit) -> bool {
-    slot.mss.sig.as_bytes().len() <= 2
+    slot.mss.signature.as_bytes().len() <= 2
 }
 
 /// Computes the Sumhash512 leaf digest for `slot` in the sig VC tree.
@@ -207,7 +207,7 @@ fn verify_merkle_sig_scheme(
 
     // Verify the Falcon signature over the attested message against the ephemeral key.
     mss.verifying_key
-        .verify_compressed(&mss.sig, msg_hash)
+        .verify_compressed(&mss.signature, msg_hash)
         .map_err(|_| VerifyError::FalconVerifyFailed { position: pos })
 }
 
@@ -332,7 +332,7 @@ pub fn verify_state_proof(
             .ok_or(VerifyError::MissingReveal { position: pos })?;
         let coin = coin_gen.next_coin();
         let l     = reveal.sig_slot.l;
-        let upper = l.checked_add(reveal.participant.signed_weight)
+        let upper = l.checked_add(reveal.participant.weight)
             .ok_or(VerifyError::WeightRangeOverflow { position: pos })?;
         
         if coin < l || coin >= upper {
@@ -481,7 +481,7 @@ mod tests {
         let mut sp = hollow(u64::MAX, 5);
         let mut reveal = Reveal::default();
         reveal.sig_slot.l = 1;
-        reveal.participant.signed_weight = u64::MAX;
+        reveal.participant.weight = u64::MAX;
 
         // Empty sig slot → sig leaf is Hash("MB") regardless of l.
         // Participant leaf covers weight, so part_leaf differs from the default.

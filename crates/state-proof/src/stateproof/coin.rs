@@ -8,11 +8,11 @@ use super::MessageHash;
 
 // ── Ln approximation ─────────────────────────────────────────────────────────
 
-/// Computes `ln_proven_weight` from `proven_weight`.
-/// 
-/// Returns `ceil(2^16 * ln(x))` as a fixed-point approximation of `ln(x)`,
-/// or `None` if `x` is zero. Required when constructing `CoinChoiceSeed`.
+/// Returns `ceil(2^16 * ln(x))` as a fixed-point approximation of `ln(x)`
+/// with 16 fractional bits, or `None` if `x == 0`. Required when constructing `CoinChoiceSeed`.
 pub fn ln_int_approximation(x: u64) -> Option<u64> {
+    // The natural logarithm of zero is undefined; hence we return this as `None`
+    // so it can be handled by the caller explicitly.
     if x == 0 { return None; }
     // A `f64` has a 53-bit mantissa; inputs above 2^53 lose integer precision, which 
     // is acceptable for typical Algorand stake weights (well below that threshold).
@@ -48,7 +48,8 @@ impl CoinChoiceSeed {
     /// Serializes `CoinChoiceSeed` into a single flattened buffer of bytes with a specific fixed order.
     ///
     /// Serialized layout:
-    /// `b"spc" || version(u8) || part_commitment([u8; 64]) || ln_proven_weight(u64 LE) || sig_commitment([u8; 64]) || signed_weight(u64 LE) || message_hash([u8; 32])`
+    /// `b"spc" || version(u8) || part_commitment([u8; 64]) || ln_proven_weight(u64 LE) ||
+    /// sig_commitment([u8; 64]) || signed_weight(u64 LE) || message_hash([u8; 32])`
     fn to_bytes(&self) -> [u8; COIN_CHOICE_SEED_SIZE] {
         let mut out = [0u8; COIN_CHOICE_SEED_SIZE];
         let mut pos = 0;
@@ -94,10 +95,10 @@ impl CoinGenerator {
         // Get the seed total signed weight
         let signed_weight = seed.signed_weight;
 
-        /* Rejection sampling threshold; ensures uniform distribution over [0, signed_weight).
-        Naively taking a random `u64 % signed_weight` is biased — lower values appear
-        slightly more often because 2^64 is rarely divisible by `signed_weight`. The
-        leftover region (2^64 % signed_weight) maps to values [0, remainder) twice.
+        /* NOTE: Rejection sampling threshold; ensures uniform distribution over [0, signed_weight).
+        Naively taking a random `u64 % signed_weight` is biased — lower values appear slightly more often
+        because 2^64 is rarely divisible by  `signed_weight`. The leftover region (2^64 % signed_weight)
+        maps to values [0, remainder) twice.
         
         Fix: only accept samples below threshold = `floor(2^64 / signed_weight) * signed_weight`.
         That is an exact multiple of `signed_weight`, so `sample % signed_weight` is uniform.

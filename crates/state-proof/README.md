@@ -38,6 +38,14 @@ verify_state_proof()                         → next TrustAnchor
                  └─ verify_txn_commitment()  → proves a specific transaction is in the block
 ```
 
+## Weight concepts
+
+Three distinct weight values appear across the state proof types:
+
+- **`Participant::weight`** — one signer's individual stake. Defines their coin range `[l, l + weight)` in the weight-interval check.
+- **`StateProof::signed_weight`** — total aggregate stake of all signers in the proof. Coins are drawn uniformly from `[0, signed_weight)`.
+- **`ln_proven_weight`** (in `TrustAnchor`) — log-space encoding of the minimum threshold that `signed_weight` must exceed for the proof to be valid.
+
 ## Core API
 
 ### Decoding

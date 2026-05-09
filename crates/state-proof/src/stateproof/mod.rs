@@ -21,7 +21,21 @@ use merkle::{Proof, Sumhash512, Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
 
 use crate::codec::{DecodeError, MsgPackDecode, Reader};
 
-/// SHA-256 hash of the state proof message (`"spm" || canonical_msgpack(message)`).
+/// A 256-bit hash digest of the State Proof message — the exact value signed 
+/// by each participating account using their ephemeral Falcon key.
+///
+/// Each participant in the State Proof protocol signs this hash (rather than the
+/// full message) to attest that the block interval commitment it represents is
+/// legitimate. The collective weight of all participants who have signed this value
+/// is what a State Proof verifier ultimately confirms.
+///
+/// This hash also feeds directly into the `Shake256`-based coin derivation used
+/// to pseudorandomly select which signature slots are revealed in the proof:
+///
+/// `Shake256("spc" || Version || ParticipantCommitment || ln(ProvenWeight)
+///           || SignatureCommitment || SignedWeight || MessageHash`
+///
+/// A `MessageHash` can be produced via [StateProofMessage::hash].
 pub type MessageHash = [u8; 32];
 
 // ── PublicKey ─────────────────────────────────────────────────────────────────
@@ -59,13 +73,17 @@ impl MsgPackDecode for CompressedSignature {
 
 // ── MerkleVerifier ────────────────────────────────────────────────────────────
 
-/// Identifies a participant's [StateProof] verifying [PublicKey] and its lifetime.
+/// The verifying key for a participant's Merkle signature scheme.
 ///
-/// The `commitment` is the vector commitment root over all ephemeral FALCON
-/// verifying keys for the participant's entire participation period. It serves
-/// as the participant's stable, long-lived public identifier (`StateProofPK`)
-/// registered on-chain for State Proof verification.
-/// 
+/// Together, `commitment` and `key_lifetime` form everything needed to
+/// verify any signature the participant produces during their participation
+/// period: `commitment` authenticates that an ephemeral key belongs to their
+/// pre-registered key tree, and `key_lifetime` determines which leaf in that
+/// tree corresponds to a given round (`round / key_lifetime`).
+///
+/// Registered on-chain as the participant's stable state proof identity
+/// (`StateProofPK`).
+///
 /// Wire codec keys: `"cmt"`, `"lf"`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MerkleVerifier {
@@ -112,29 +130,33 @@ impl MsgPackDecode for MerkleVerifier {
 
 // ── MerkleSignatureScheme ───────────────────────────────────────────────────────────
 
-/// A Merkle-based signature scheme used in State Proof verification.
+/// One participant's complete Merkle signature over a `MessageHash`.
 ///
-/// This binds an FALCON signature to a specific Vector Commitment (VC) tree leaf
-/// via a Merkle proof, allowing verification that the signing key was authorized for
-/// the given round.
-/// 
+/// Bundles the Falcon signature, the ephemeral key that produced it, the
+/// leaf index of that key in the participant's pre-registered key tree, and
+/// the Merkle proof authenticating the key against `MerkleVerifier::commitment`.
+///
 /// Wire codec keys: `"sig"`, `"idx"`, `"prf"`, `"vkey"`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MerkleSignatureScheme {
-    /// The FALCON [CompressedSignature] over the attested message for this round.
+    /// The Falcon signature over the attested `MessageHash` for this interval.
     ///
     /// Wire codec key: `"sig"`.
-    pub sig: CompressedSignature,
-    /// The leaf index identifying which key was used to sign.
+    pub signature: CompressedSignature,
+    /// The leaf index of `verifying_key` in the participant's key tree.
+    ///
+    /// Derived from the signed round: `round / key_lifetime`. Used together
+    /// with `proof` to authenticate `verifying_key` against
+    /// `MerkleVerifier::commitment.
     ///
     /// Wire codec key: `"idx"`.
     pub vc_index: u64,
-    /// Merkle membership proof path authenticating `verifying_key` 
-    /// against the Vector Commitment (VC) tree `root`.
+    /// Merkle membership proof authenticating `verifying_key` against the
+    /// participant's `MerkleVerifier::commitment`.
     ///
     /// Wire codec key: `"prf"`.
     pub proof: Proof<Sumhash512>,
-    /// The ephemeral FALCON verifying key (public key) used to verify `sig`.
+    /// Ephemeral Falcon verifying key used to verify `signature`.
     ///
     /// Wire codec key: `"vkey"`.
     pub verifying_key: PublicKey,
@@ -143,7 +165,7 @@ pub struct MerkleSignatureScheme {
 impl Default for MerkleSignatureScheme {
     fn default() -> Self {
         Self {
-            sig: CompressedSignature::from_bytes(&[FALCON_DET1024_SIG_COMPRESSED_HEADER, 0]).unwrap(),
+            signature: CompressedSignature::from_bytes(&[FALCON_DET1024_SIG_COMPRESSED_HEADER, 0]).unwrap(),
             vc_index: 0,
             proof: Proof::<Sumhash512>::new(0, vec![]),
             verifying_key: PublicKey::from_bytes(&[0u8; FALCON_DET1024_PUBKEY_SIZE]).unwrap(),
@@ -158,7 +180,7 @@ impl MerkleSignatureScheme {
     /// `b"sps" || l(u64 LE) || MerkleSignatureScheme([u8; 4366])`
     pub(crate) fn to_bytes(&self) -> Result<[u8; MERKLE_SIG_SCHEME_FIXED_REPR_SIZE], algorand_falcon_keys::Error> {
         // Convert Falcon signature from compressed to constant-time (ct) format.
-        let ct = self.sig.to_ct()?;
+        let ct = self.signature.to_ct()?;
 
         // Allocate output buffer and initalize cursor position.
         let mut out = [0u8; MERKLE_SIG_SCHEME_FIXED_REPR_SIZE];
@@ -175,7 +197,7 @@ impl MerkleSignatureScheme {
         //Proof fixed encoding: tree_depth (1 B) || zero-pad for unused slots || path entries
         out[pos] = self.proof.tree_depth; pos += 1;
 
-        // Remaining buffer up to its size will be filled with padding.
+        // The remaining buffer, up to its total fixed size, will be filled with padding.
         // E.g. `tree_depth = 3`: [hash_a, 32], [hash_b, 32], [hash_c, 32], [00..00, 32]...
         let pad = MSS_VC_MAX_DEPTH.saturating_sub(self.proof.tree_depth) as usize;
         let path_start = pos + pad * SUMHASH512_DIGEST_SIZE;
@@ -190,7 +212,7 @@ impl MerkleSignatureScheme {
 
     /// Returns the salt version byte embedded in the CompressedSignature encoding.
     pub(crate) fn salt_version(&self) -> u8 {
-        self.sig.salt_version()
+        self.signature.salt_version()
     }
 }
 
@@ -200,7 +222,7 @@ impl MsgPackDecode for MerkleSignatureScheme {
         let mut out = MerkleSignatureScheme::default();
         for _ in 0..n {
             match r.read_str()? {
-                "sig" => out.sig = CompressedSignature::decode_from(r)?,
+                "sig" => out.signature = CompressedSignature::decode_from(r)?,
                 "idx" => out.vc_index = r.read_uint()?,
                 "prf" => out.proof = Proof::decode_from(r)?,
                 "vkey" => out.verifying_key = PublicKey::decode_from(r)?,
@@ -213,21 +235,24 @@ impl MsgPackDecode for MerkleSignatureScheme {
 
 // ── SigSlotCommit ─────────────────────────────────────────────────────────────
 
-/// A participant committed signature slot containing:
+/// The data committed into one slot of the signature array.
 ///
-/// * `mss`: The participant's `MerkleSignatureScheme` signature over the attested
-///   message, authenticated via `sig_proofs`.
-/// * `l`: The cumulative stake weight of all slots below this one (`u64`),
-///   defining this slot's coin range `[l, l + weight)`.
-/// 
+/// Contains the participant's Merkle signature and `l`, the cumulative
+/// weight of all slots below this one. Together with the participant's
+/// `signed_weight`, `l` defines the coin range `[l, l + signed_weight)`
+/// used in the weight-interval check.
+///
 /// Wire codec keys: `"s"`, `"l"`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SigSlotCommit {
-    /// The participant's `MerkleSignatureScheme` over the attested message; authenticated via `sig_proofs`.
+    /// The participant's Merkle signature over the `MessageHash`;
+    /// authenticated against `StateProof::sig_commitment` via
+    /// `StateProof::sig_proofs`.
     ///
     /// Wire codec key: `"s"`.
     pub mss: MerkleSignatureScheme,
-    /// Cumulative weight of signatures in all slots below this one; defines this slot's coin range `[l, l + weight)`.
+    /// Cumulative weight of signatures in all slots below this one;
+    /// defines this slot's coin range `[l, l + weight)`.
     ///
     /// Wire codec key: `"l"`.
     pub l: u64,
@@ -250,20 +275,19 @@ impl MsgPackDecode for SigSlotCommit {
 
 // ── Participant ───────────────────────────────────────────────────────────────
 
-/// An online account that participated in signing the state proof.
+/// An online account that participated in signing a given `MessageHash`.
 ///
 /// Codec keys: `"p"`, `"w"`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Participant {
-    /// Long-term `MerkleVerifier` containing the `Sumhash512Digest` commitment root of the
-    /// participant's ephemeral `PublicKey` tree and the key rotation interval.
+    /// The participant's [`MerkleVerifier`]: verifying key and key lifetime.
     ///
     /// Codec key: `"p"`.
     pub pk: MerkleVerifier,
-    /// Signed weight (stake); the participant's share of the total signed weight.
+    /// This participant's individual stake weight.
     ///
     /// Codec key: `"w"`.
-    pub signed_weight: u64,
+    pub weight: u64,
 }
 
 impl MsgPackDecode for Participant {
@@ -273,7 +297,7 @@ impl MsgPackDecode for Participant {
         for _ in 0..n {
             match r.read_str()? {
                 "p" => out.pk = MerkleVerifier::decode_from(r)?,
-                "w" => out.signed_weight = r.read_uint()?,
+                "w" => out.weight = r.read_uint()?,
                 _ => r.skip()?,
             }
         }
@@ -283,17 +307,25 @@ impl MsgPackDecode for Participant {
 
 // ── Reveal ────────────────────────────────────────────────────────────────────
 
-/// A revealed slot in the state proof: the `SigSlotCommit` and the
-/// `Participant` data, both authenticated via Merkle proofs in `StateProof`.
+/// The data opened at one pseudorandomly challenged position in the proof.
+///
+/// Each `Reveal` pairs one entry from the signature array (`sig_slot`) with
+/// the matching entry from the participants array (`participant`). Together
+/// they let the verifier confirm: the participant signed the `MessageHash`,
+/// and their stake satisfies the weight-interval check for the corresponding coin.
+///
+/// Keyed by array position in [`StateProof::reveals`].
 ///
 /// Codec keys: `"s"`, `"p"`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Reveal {
-    /// The committed signature slot containing the `MerkleSignatureScheme` and cumulative signed weight.
+    /// The signature slot at this position: the participant's `MerkleSignatureScheme`
+    /// and cumulative weight `l`, used for the weight-interval check.
     ///
     /// Codec key: `"s"`.
     pub sig_slot: SigSlotCommit,
-    /// The participant who produced this signature slot.
+    /// The participant at this position: their `MerkleVerifier` (verifying key)
+    /// and stake weight, used for the weight-interval check.
     ///
     /// Codec key: `"p"`.
     pub participant: Participant,
@@ -316,63 +348,51 @@ impl MsgPackDecode for Reveal {
 
 // ── StateProof ────────────────────────────────────────────────────────────────
 
-/// A post-quantum state proof attesting to the Algorand block state at a given round.
+/// Compact certificate proving a quorum of Algorand's online stake holders
+/// agreed on a block interval commitment spanning 256 consecutive rounds.
 ///
-/// Received from the network and verified against a known `sig_commit` root and
-/// `signed_weight`. Codec keys match the Algorand wire format exactly.
+/// Rather than carrying every signature, a `StateProof` commits to the full
+/// signer set via `sig_commitment` and `signed_weight`, then reveals only a
+/// pseudorandomly selected subset — chosen via SHAKE-256 coin toss — sufficient
+/// to prove that total signed stake exceeds `ProvenWeight` (≥ 30% of online
+/// stake). Two Merkle proofs (`sig_proofs`, `part_proofs`) authenticate the
+/// revealed entries against both commitments.
+///
+/// Verified by [`verify_state_proof`] against a trusted [`TrustAnchor`].
 ///
 /// Wire codec keys: `"c"`, `"w"`, `"S"`, `"P"`, `"v"`, `"r"`, `"pr"`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StateProof {
-    /// 512-bit `Sumhash512` hash digest vector commitment root on the enitre signature array
-    /// (all participants who signed, not just the revealed ones).
+    /// VC root over the entire signature array (all signers, not just the revealed ones).
     ///
     /// Wire codec key: `"c"`.
     pub sig_commitment: Sumhash512Digest,
-    /// 64-bit LE integer representing total (stake) signed weight of all participants 
-    /// whose signatures appear in `StateProof` the signature array.
+    /// Total stake of all signers in this proof.
     ///
     /// Wire codec key: `"w"`.
     pub signed_weight: u64,
-    /// Merkle membership proof path authenticating all revealed 
-    /// `SigSlotCommit` leaves against the Vector Commitment (VC) tree `root`.
+    /// Merkle proof authenticating the revealed `SigSlotCommit` leaves against `sig_commitment`.
     ///
     /// Wire codec key: `"S"`.
     pub sig_proofs: Proof<Sumhash512>,
-    /// Merkle membership proof path authenticating all revealed `Participant` 
-    /// leaves against the Vector Commitment (VC) tree `root`.
-    /// 
+    /// Merkle proof authenticating the revealed `Participant`
+    /// leaves against `TrustAnchor::part_commitment`.
+    ///
     /// Wire codec key: `"P"`.
     pub part_proofs: Proof<Sumhash512>,
-    /// Expected FALCON signature salt version; all signatures in `reveals` must match this value.
+    /// Salt version all Falcon signatures in `reveals` must match.
     ///
     /// Wire codec key: `"v"`.
     pub mss_salt_version: u8,
-    /// Revealed positions and their corresponding data.
+    /// Ordered sequence of (position, [`Reveal`]) pairs decoded from the wire map.
     ///
-    /// A sparse map from a participant's position in the array to a [`Reveal`]
-    /// struct. Each entry exposes a single array position and contains:
-    ///
-    /// - **Participant information**:
-    ///   - The participant's balance in μALGO (weight).
-    ///   - The participant's Merkle signature scheme commitment (`StateProofPK`).
-    ///
-    /// - **Signature information**:
-    ///   - The participant's `L` value, used for weight-range verification:
-    ///     `r.Sig.L <= coin_i < r.Sig.L + r.Part.Weight`.
-    ///   - The participant's serialized Merkle Signature for the message being proven.
-    ///
-    /// The positions revealed are pseudorandomly chosen via a SHAKE256-based coin
-    /// derived from the signature commitment, participant commitment, signed weight,
-    /// and the State Proof message hash.
-    /// 
     /// Wire codec key: `"r"`.
     pub reveals: Vec<(u64, Reveal)>,
-    /// Sequence of tree positions to reveal, in coin-index order.
+    /// Array position for each coin, in coin-index order.
     ///
-    /// Position `i` corresponds to coin `i` in the verifier's coin-check loop:
-    /// `reveals[positions_to_reveal[i]]` must satisfy the weight-interval check for `coin_i`.
-    /// 
+    /// `positions_to_reveal[i]` is the array position whose `Reveal`
+    /// must satisfy the weight-interval check for coin `i`.
+    ///
     /// Wire codec key: `"pr"`.
     pub positions_to_reveal: Vec<u64>,
 }
