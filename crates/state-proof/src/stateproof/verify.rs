@@ -167,15 +167,21 @@ fn verify_merkle_sig_scheme(
     message_hash: &MessageHash,
     pos: u64,
 ) -> Result<(), VerifyError> {
+    // Reconstruct the VC leaf for the ephemeral key at its epoch boundary.
+    // All rounds within the same key_lifetime window map to the same epoch
+    // start, so the same leaf covers the entire window.
     let leaf = hash_obj(h, &EphemeralKeyLeaf {
         verifying_key: &mss.verifying_key,
         round: verifier.key_epoch_start(round),
     });
 
+    // Confirm the key was legitimately pre-registered in the participant's
+    // key tree — i.e. it belongs to their MerkleVerifier::commitment.
     if !mss.proof.verify_vc(leaf, mss.vc_index as usize, &verifier.commitment) {
         return Err(VerifyError::VcProofFailed { position: pos });
     }
 
+    // Confirm the key actually signed this interval's MessageHash.
     mss.verifying_key
         .verify_compressed(&mss.signature, message_hash)
         .map_err(|_| VerifyError::FalconVerifyFailed { position: pos })
@@ -270,16 +276,24 @@ pub fn verify_state_proof(
     }
 
     // ── 5. Batch VC proof for the signature commitment ────────────────────────
+    // sig_commitment is self-reported by the proof — the batch VC check
+    // confirms the revealed sig slots genuinely belong to that commitment.
     if !state_proof.sig_proofs.verify_batch_vc(&sig_leaves, &state_proof.sig_commitment) {
         return Err(VerifyError::SigProofFailed);
     }
 
     // ── 6. Batch VC proof for the participant commitment ──────────────────────
+    // part_commitment comes from the trusted anchor, not the proof being
+    // verified — this is the key security boundary: the eligible signer list
+    // is pinned to a source the caller already trusts.
     if !state_proof.part_proofs.verify_batch_vc(&part_leaves, part_commitment) {
         return Err(VerifyError::PartProofFailed);
     }
 
     // ── 7. Coin generation and weight-range check ─────────────────────────────
+    // The seed is derived deterministically from the proof parameters, making
+    // coin selection independently reproducible — neither prover nor verifier
+    // can influence which positions are checked after the proof is assembled.
     let seed = CoinChoiceSeed {
         part_commitment: *part_commitment,
         ln_proven_weight,
@@ -298,6 +312,8 @@ pub fn verify_state_proof(
         let upper = lower.checked_add(reveal.participant.weight)
             .ok_or(VerifyError::WeightRangeOverflow { position: pos })?;
 
+        // Each coin must fall within [lower, upper) — the participant's
+        // weight range in the cumulative stake ordering.
         if !(lower..upper).contains(&coin) {
             return Err(VerifyError::CoinOutOfRange { index: i, position: pos, coin });
         }

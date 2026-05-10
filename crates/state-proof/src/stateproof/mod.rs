@@ -34,7 +34,7 @@ use crate::codec::{DecodeError, MsgPackDecode, Reader};
 /// `Shake256("spc" || Version || ParticipantCommitment || ln(ProvenWeight)
 ///           || SignatureCommitment || SignedWeight || MessageHash`
 ///
-/// A `MessageHash` can be produced via [StateProofMessage::hash].
+/// A `MessageHash` can be produced via [`StateProofMessage::hash`].
 pub type MessageHash = [u8; 32];
 
 // ── PublicKey ─────────────────────────────────────────────────────────────────

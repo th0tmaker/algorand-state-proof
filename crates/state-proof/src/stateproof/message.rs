@@ -21,7 +21,7 @@ pub struct StateProofMessage {
     pub block_headers_commitment: [u8; SHA256_DIGEST_SIZE],
     /// 512-bit `Sumhash512` hash digest vector commitment root on the voters array.
     ///
-    /// Becomes [part_commitment](TrustAnchor::part_commitment) for verifying the next State Proof.
+    /// Becomes [`TrustAnchor::part_commitment`] for verifying the next State Proof.
     ///
     /// Wire codec key: `"v"`.
     pub voters_commitment: Sumhash512Digest,

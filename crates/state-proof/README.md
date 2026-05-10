@@ -1,8 +1,10 @@
 # algorand-state-proof
 
-The primary crate in the `algorand-state-proof` workspace. It brings together all supporting crates into a complete decoder and verifier for Algorand State Proofs, suitable for light clients, bridges, and zkVM guests.
-
-The crate is structured around four areas of responsibility. The **verifier** (`stateproof/verifier.rs`) implements the full seven-step state proof verification protocol — weight checks, Merkle batch proofs, Falcon signature verification, and coin-range validation. The **message and trust types** (`stateproof/message.rs`) provide `StateProofMessage` and `TrustAnchor`, which carry the block interval data and chain trust across consecutive intervals. The **commitment verifiers** (`stateproof/commitment.rs`) expose `LightBlockHeader` and the two downstream verification functions that let callers prove individual block headers and transactions against the commitments attested by a state proof. The **coin generator** (`stateproof/coin.rs`) implements the SHAKE-256-based pseudorandom selection of positions to reveal, matching Algorand's protocol exactly. Underpinning all of these is a custom **canonical MessagePack codec** (`codec/`) — an Algorand-compatible encoder and decoder that handles the specific key-sorting and zero-omission rules of Algorand's wire format.
+Compact, trustless verifier for Algorand State Proofs — suitable for light
+clients, bridges, and zkVM guests. Decodes the proof from wire bytes and
+verifies the full seven-step protocol: weight threshold, strength inequality,
+batch Merkle proofs, Falcon signature verification, ephemeral key commitment,
+and coin-range validation.
 
 ## Disclaimer
 
@@ -18,15 +20,22 @@ algorand-state-proof = { git = "https://github.com/th0tmaker/algorand-state-proo
 algorand-state-proof = { git = "https://github.com/th0tmaker/algorand-state-proof", rev = "<commit-sha>", features = ["serde"] }
 ```
 
+Requires a C compiler (GCC, Clang, or MSVC) for the Falcon-1024 C library.
+
 ## Overview
 
-An Algorand State Proof attests to the state of the blockchain over a 256-round interval. Verifying one requires:
+A State Proof is a compact certificate proving that a quorum of Algorand's
+online stake holders agreed on a block interval commitment spanning 256
+consecutive rounds. Verifying one requires three inputs:
 
-- A **`StateProof`** — decoded from the State Proof transaction wire bytes
-- A **`StateProofMessage`** — decoded from the same transaction, containing the block interval commitment and the trust parameters for the next interval
-- A **`TrustAnchor`** — the `part_commitment` and `ln_proven_weight` from the *previous* interval's `StateProofMessage`
+- **`StateProof`** — decoded from the State Proof transaction wire bytes
+- **`StateProofMessage`** — decoded from the same transaction; contains the
+  block interval commitment and the trust parameters for the *next* interval
+- **`TrustAnchor`** — `part_commitment` and `ln_proven_weight` from the
+  *previous* interval's `StateProofMessage`
 
-On success, `verify_state_proof` returns the next `TrustAnchor`, which is passed to the following call. This chains verification across intervals.
+On success, `verify_state_proof` returns the next `TrustAnchor` for the
+following call. This chains verification across intervals.
 
 The full verification chain this crate enables:
 
@@ -57,14 +66,11 @@ let sp      = StateProof::from_msgpack(sp_bytes)?;
 let message = StateProofMessage::from_msgpack(msg_bytes)?;
 ```
 
-Both types are decoded from Algorand canonical MessagePack wire bytes, as received from the network or indexer.
-
 ### State proof verification
 
 ```rust
 use algorand_state_proof::{TrustAnchor, verify_state_proof};
 
-// anchor is sourced from the previous interval's StateProofMessage
 let anchor = TrustAnchor {
     part_commitment:  voters_commitment_from_prev_message,  // [u8; 64]
     ln_proven_weight: ln_proven_weight_from_prev_message,   // u64
@@ -74,52 +80,44 @@ let next_anchor = verify_state_proof(&sp, &message, &anchor)?;
 // Pass next_anchor to the next verify_state_proof call.
 ```
 
-The first `TrustAnchor` must be sourced out-of-band from a trusted checkpoint — either the genesis state or a known-good block header from an honest full node.
+The first `TrustAnchor` must be bootstrapped out-of-band from a trusted
+checkpoint — either the genesis state or a known-good block header.
 
 ### Block header verification
-
-Once a state proof is verified, individual block headers within the attested interval can be proven against `message.block_headers_commitment`:
 
 ```rust
 use algorand_state_proof::{LightBlockHeader, verify_block_header_commitment, Proof, Sha256};
 
-// header fields and proof from GET /v2/blocks/{round}/lightheader[/proof]
 let header = LightBlockHeader::from_msgpack(header_bytes)?;
 let index  = message.block_index_for_round(round).expect("round not in interval");
-let proof  = Proof::<Sha256>::new(tree_depth, path);  // from API response
+let proof  = Proof::<Sha256>::new(tree_depth, path);
 
-let ok = verify_block_header_commitment(
-    &header,
-    index,
-    &proof,
-    &message.block_headers_commitment,
-);
+let ok = verify_block_header_commitment(&header, index, &proof, &message.block_headers_commitment);
 ```
 
-### Transaction verification
+`LightBlockHeader` is not returned directly by the algod API — it must be
+constructed from the block header response. Exactly one of `seed` or
+`block_hash` is populated depending on the consensus protocol version; the
+other must be `[0u8; 32]`.
 
-Once a block header is verified, individual transactions can be proven against `header.txn_commitment`:
+### Transaction verification
 
 ```rust
 use algorand_state_proof::{verify_txn_commitment, Proof, Sha256};
 
-// stib_hash, idx, proof from:
-// GET /v2/blocks/{round}/transactions/{txid}/proof?hashtype=sha256
+// Both digests from GET /v2/blocks/{round}/transactions/{txid}/proof?hashtype=sha256
 let ok = verify_txn_commitment(
-    stib_hash,   // [u8; 32] — the "stibhash" field from the API response
-    txn_index,   // the "idx" field
-    &proof,      // Proof::<Sha256>::new(treedepth, path)
+    txn_sha256,           // SHA-256("TX" || canonical_msgpack(txn))
+    stib_sha256,          // SHA-256("STIB" || Sig(Tx) || ApplyData)
+    txn_index,            // "idx" field from the proof response
+    &proof,               // Proof::<Sha256>::new(treedepth, path)
     &header.txn_commitment,
 );
 ```
 
-### Block index helper
-
-```rust
-// Computes the zero-based leaf index of `round` in the 256-block VcTree.
-// Returns None if round is outside [first_attested_round, last_attested_round].
-let index: Option<usize> = message.block_index_for_round(round);
-```
+Note: `txn_sha256` uses **SHA-256**, not the SHA-512/256 used in Algorand
+transaction IDs. Transaction bytes must include `gh` and `gen` fields that
+block storage strips.
 
 ### Error handling
 
@@ -149,9 +147,34 @@ match verify_state_proof(&sp, &message, &anchor) {
 }
 ```
 
+## Public types
+
+The following types are exposed for callers who need to inspect decoded state
+proof data:
+
+| Type | Description |
+|---|---|
+| `StateProof` | The proof itself — sig/part commitments, reveals, positions |
+| `StateProofMessage` | What was attested: block interval commitment + next-interval trust params |
+| `TrustAnchor` | Trusted parameters passed into and returned from `verify_state_proof` |
+| `LightBlockHeader` | Minimal block header for commitment verification |
+| `MessageHash` | `[u8; 32]` — SHA-256 digest of the `StateProofMessage` |
+| `Reveal` | Data opened at one pseudorandomly challenged array position |
+| `Participant` | An online account that signed: verifying key + stake weight |
+| `SigSlotCommit` | Signature slot: the participant's Merkle signature + cumulative weight `l` |
+| `MerkleVerifier` | Participant's verifying key: VC root over ephemeral keys + key lifetime |
+| `MerkleSignatureScheme` | One complete Merkle signature: Falcon sig + ephemeral key + VC proof |
+| `FalconPublicKey` | Re-exported ephemeral Falcon-1024 verifying key |
+| `FalconCompressedSig` | Re-exported compressed Falcon-1024 signature |
+
 ## Trust model
 
-This crate is a pure verifier — it holds no private key material and makes no network calls. Its single trust assumption is the initial `TrustAnchor`: the first anchor must be bootstrapped from a source you already trust (genesis state, or a checkpoint from an honest full node). Every subsequent anchor is derived cryptographically from the previous one. If the initial anchor is correct and the verification chain is unbroken, the crate provides post-quantum-secure attestation of Algorand's ledger state.
+This crate is a pure verifier — it holds no private key material and makes no
+network calls. Its single trust assumption is the initial `TrustAnchor`: the
+first anchor must be bootstrapped from a source you already trust. Every
+subsequent anchor is derived cryptographically from the previous one. If the
+initial anchor is correct and the verification chain is unbroken, the crate
+provides post-quantum-secure attestation of Algorand's ledger state.
 
 ## Data sources
 
@@ -166,7 +189,8 @@ All wire bytes passed to this crate are fetched from the Algorand node (algod) A
 | Block header proof path | `GET /v2/blocks/{round}/lightheader/proof` |
 | Transaction proof | `GET /v2/blocks/{round}/transactions/{txid}/proof?hashtype=sha256` |
 
-The `hashtype=sha256` parameter is required for transaction proofs — the default `sha512_256` variant is incompatible with `verify_txn_commitment`, which verifies against the SHA-256 commitment stored in `LightBlockHeader::txn_commitment`.
+The `hashtype=sha256` parameter is required — the default `sha512_256` variant
+is incompatible with `verify_txn_commitment`.
 
 ## Cryptographic primitives
 
@@ -179,7 +203,8 @@ The `hashtype=sha256` parameter is required for transaction proofs — the defau
 
 ## Optional: serde feature
 
-Enables `serde::Serialize` and `serde::Deserialize` for `TrustAnchor`, required for passing it across a RISC Zero zkVM guest/host boundary:
+Enables `serde::Serialize` and `serde::Deserialize` for `TrustAnchor`, required
+for passing it across a RISC Zero zkVM guest/host boundary:
 
 ```toml
 algorand-state-proof = { ..., features = ["serde"] }
@@ -192,7 +217,9 @@ let next_anchor = verify_state_proof(&sp, &message, &anchor)?;
 env::commit(&next_anchor);
 ```
 
-The `part_commitment` field (`[u8; 64]`) is serialized as raw bytes, with a visitor that handles both binary formats (zero-copy) and JSON/text formats (sequence of integers).
+The `part_commitment` field (`[u8; 64]`) is serialized as raw bytes, with a
+visitor that handles both binary (zero-copy) and JSON/text (integer sequence)
+formats.
 
 ## Building
 
@@ -202,7 +229,7 @@ cargo test
 cargo test --features serde
 ```
 
-Requires a C compiler (GCC, Clang, or MSVC) for the Falcon-1024 C library. The minimum supported Rust edition is **2024**.
+The minimum supported Rust edition is **2024**.
 
 ## License
 
