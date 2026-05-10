@@ -6,9 +6,9 @@ use merkle::HashType;
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum DecodeError {
-    /// The `HashFactory` type decoded from the wire does not match the expected type for this [merkle::Proof].
+    /// The `HashFactory` type decoded from the wire does not match the expected type for this [`merkle::Proof`].
     HashTypeMismatch { expected: HashType, got: HashType },
-    /// A `HashFactory` type tag did not correspond to a known [HashType].
+    /// A `HashFactory` type tag did not correspond to a known [`HashType`].
     InvalidHashType(u64),
     /// A byte sequence had the wrong length for the expected hash digest.
     InvalidDigestSize { expected: usize, got: usize },

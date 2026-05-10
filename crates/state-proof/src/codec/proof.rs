@@ -3,7 +3,9 @@
 
 use merkle::{Sumhash512, Sumhash512Digest, HashFactory, HashType, Proof, SUMHASH512_DIGEST_SIZE};
 
-use crate::codec::{AlgorandMessagePack, DecodeError, MsgPackDecode, Reader};
+#[cfg(test)]
+use crate::codec::AlgorandMessagePack;
+use crate::codec::{DecodeError, MsgPackDecode, Reader};
 
 // ── HashType ──────────────────────────────────────────────────────────────────
 
@@ -33,7 +35,7 @@ impl MsgPackDecode for HashFactory {
 
 // ── Proof ─────────────────────────────────────────────────────────────────────
 
-/// Encodes a `Proof<Sumhash512>` into canonical Algorand MessagePack bytes.
+#[cfg(test)]
 pub(crate) fn encode_proof(proof: &Proof<Sumhash512>) -> Vec<u8> {
     AlgorandMessagePack::new()
         .map("hsh", AlgorandMessagePack::new().uint("t", proof.hash_factory.hash_type as u64))

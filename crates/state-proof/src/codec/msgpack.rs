@@ -100,28 +100,16 @@ enum Value {
 
 // ── AlgorandMessagePack ───────────────────────────────────────────────────────
 
-/// ## Overview
-/// 
 /// Canonical MessagePack builder compatible with Algorand's encoding rules.
 ///
-/// Keys are sorted lexicographically on [AlgorandMessagePack::encode];
-/// zero and empty fields are omitted automatically.
+/// Keys are sorted lexicographically on encode; zero and empty fields are
+/// omitted automatically.
 ///
-/// ## Limitations
-/// 
-/// This builder supports only three value kinds: unsigned integers, binary
-/// blobs, and nested maps.  All binary values are emitted as msgpack **bin**
-/// (`0xc4`–`0xc6`), never as fixstr/str.
-///
-/// This is correct for every type currently encoded here (`StateProofMessage`,
-/// `LightBlockHeader`, `Proof<Sumhash512>`) because their fields are either
-/// integers or raw bytes.  It would produce incorrect canonical bytes for any
-/// type that has a **string-valued** field (e.g. an Algorand transaction's
-/// `type = "axfer"`, which must be fixstr `0xa5`).  Do not use this builder
-/// to encode transactions or any other type with string field values.
+/// Supports only unsigned integers, binary blobs, and nested maps — correct
+/// for all types encoded here (`StateProofMessage`, `LightBlockHeader`,
+/// `Proof<Sumhash512>`). Do not use for types with string-valued fields (e.g.
+/// Algorand transactions), as binary values are emitted as `bin`, never `str`.
 pub(crate) struct AlgorandMessagePack {
-    /// Holds ordered key-value pairs for Algorand MessagePack encoding, where
-    /// the key is a string tag and the value is a variant of `Value`.
     entries: Vec<(&'static str, Value)>,
 }
 
@@ -155,7 +143,6 @@ impl AlgorandMessagePack {
         }
     }
 
-    // Creates a new instance of the serialization format ready to append input data
     pub(crate) fn new() -> Self {
         Self { entries: Vec::new() }
     }
@@ -177,6 +164,7 @@ impl AlgorandMessagePack {
     }
 
     /// Appends an array-of-binaries field; omitted if `elems` is empty.
+    #[cfg(test)]
     pub(crate) fn bytes_array(mut self, key: &'static str, elems: &[impl AsRef<[u8]>]) -> Self {
         if !elems.is_empty() {
             let raw: Vec<Vec<u8>> = elems.iter().map(|i| i.as_ref().to_vec()).collect();
@@ -186,7 +174,7 @@ impl AlgorandMessagePack {
     }
 
     /// Appends an array-of-u64 field; omitted if `elems` is empty.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn uint_array(mut self, key: &'static str, elems: &[u64]) -> Self {
         if !elems.is_empty() {
             self.entries.push((key, Value::UintArray(elems.to_vec())));
@@ -195,7 +183,7 @@ impl AlgorandMessagePack {
     }
 
     /// Appends an integer-keyed map field; omitted if `entries` is empty.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn uint_keyed_map(mut self, key: &'static str, entries: Vec<(u64, AlgorandMessagePack)>) -> Self {
         if !entries.is_empty() {
             self.entries.push((key, Value::UintKeyedMap(entries)));
@@ -204,6 +192,7 @@ impl AlgorandMessagePack {
     }
 
     /// Appends a nested map field; omitted if the inner map has no entries.
+    #[cfg(test)]
     pub(crate) fn map(mut self, key: &'static str, inner: AlgorandMessagePack) -> Self {
         if !inner.entries.is_empty() {
             self.entries.push((key, Value::Map(inner)));
