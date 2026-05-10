@@ -1,16 +1,23 @@
 // crates/sumhash/src/lib.rs
 
+#![no_std]
+extern crate alloc;
+
+use alloc::{boxed::Box, vec, vec::Vec};
 use core::fmt;
 
 use xof::{Shake256, Zeroize};
 
 // ── Sumhash constants ─────────────────────────────────────────────────────────
 
-/// Number of message bytes consumed per compression (m_bytes − n × 8 = 128 − 64).
-#[allow(unused)]
+/// Bytes per state lane (`u64` = 8 bytes).
+const LANE_BYTES: usize = core::mem::size_of::<u64>();
+
+/// Number of message bytes consumed per compression (m_bytes − n × LANE_BYTES = 128 − 64).
+#[cfg(test)]
 const SUMHASH512_BLOCK_SIZE: usize = 64;
 
-/// Byte length of a Sumhash512 digest (64 bytes = 512 bits = 8 × 64-bit words).
+/// Byte length of a Sumhash512 digest (64 bytes = 512 bits = 8 × 64-bit lanes).
 pub const SUMHASH512_DIGEST_SIZE: usize = 64;
 
 // ── Sumhash types ─────────────────────────────────────────────────────────────
@@ -51,7 +58,7 @@ fn sum_byte(cols: &[u64; 8], byte: u8) -> u64 {
 
 // ── Sumhash ───────────────────────────────────────────────────────────────────
 
-/// Subset-sum hash over an `n × m`-bit matrix derived from [xof::Shake256]
+/// Subset-sum hash over an `n × m`-bit matrix derived from [`xof::Shake256`]
 /// via `SHAKE256(u=64 || n || m || seed)`.
 ///
 /// A lookup table is built at construction so each compression costs
@@ -60,7 +67,7 @@ fn sum_byte(cols: &[u64; 8], byte: u8) -> u64 {
 pub(crate) struct Sumhash {
     /// Precomputed lookup table: `table[row][byte_pos][byte_val]`.
     table: Box<[Box<[[u64; 256]]>]>,
-    /// Running chaining value — `table.len()` words/lanes, updated on each compression.
+    /// Running chaining value — `table.len()` lanes, updated on each compression.
     state: Box<[u64]>,
     /// Scratch buffer for `compress()` output; pre-allocated to avoid a heap allocation per call.
     out: Box<[u64]>,
@@ -91,31 +98,13 @@ impl Drop for Sumhash {
 }
 
 impl Sumhash {
-    /// Absorbs `u=64 || n || m || seed` into [xof::Shake256] and streams
+    /// Absorbs `u=64 || n || m || seed` into [`xof::Shake256`] and streams
     /// the output directly into a lookup table — 8 `u64` words per byte position,
     /// 256 sums each. Returns a zeroed sponge ready to accept input.
     pub(crate) fn new(n: u16, m: u16, seed: &[u8]) -> Self {
-        /* The message block is the portion of the matrix input
-        beyond the chaining value.
-
-        The `block_size` is defined by the matrix dimensions
-        and computed via `block_size = m_bytes - (n × 8)`.
-        It is fixed at construction time and never changes
-        after that. The computed `block_size` IS the final
-        buffer length against which the position cursor is
-        checking against.
-
-        For Algorand's fixed params (n=8, m=1024): 128 - 64
-        = 64 bytes.
-
-        For Algorand's present use case, this step could be
-        avoided by just hardcoding the fixed values as a
-        constant. However, in our version we explore a
-        more generic Sumhash where the matrix can be
-        constructed with arbitrary params to have an
-        implementation that allows more flexibility if
-        in an event that is required in some future use case.
-        */
+        // block_size = m_bytes - n×8: the message portion of the matrix input
+        // (everything beyond the chaining value). For Algorand's fixed params
+        // (n=8, m=1024): 128 - 64 = 64 bytes.
 
         // Derive the `(n × m)` matrix from SHAKE256 by absorbing
         // `u=64 || n || m || seed`, where `u`, `n` and `m` are
@@ -131,7 +120,7 @@ impl Sumhash {
         // Widen to usize for allocations and arithmetic below.
         let n = n as usize;
         let m_bytes = m as usize / 8;
-        let block_size = m_bytes - n * 8;
+        let block_size = m_bytes - n * LANE_BYTES;
 
         // Stream `(n × m)` `u64` values from SHAKE256 directly into
         // the lookup table 8 words at a time (one column group per byte
@@ -169,14 +158,14 @@ impl Sumhash {
     /// serialised as little-endian `u64`s, followed by the message block.
     /// The result directly replaces the chaining value — no feed-forward.
     ///
-    /// A temporary output buffer is required because all `n` state words are
+    /// A temporary output buffer is required because all `n` state lanes are
     /// read when computing each output word; updating in-place would corrupt
     /// the state bytes fed to later rows.
     fn compress(&mut self, message: &[u8]) {
         let n = self.state.len();
         // The chaining value occupies the first n×8 byte positions of the
         // matrix input; the message block occupies the remaining positions.
-        let state_bytes = n * 8;
+        let state_bytes = n * LANE_BYTES;
 
         // Compute one output word per row of the matrix.
         for i in 0..n {
@@ -189,7 +178,7 @@ impl Sumhash {
             // the precomputed column sum for that byte at its byte position.
             for (wi, &w) in self.state.iter().enumerate() {
                 let wb = w.to_le_bytes();
-                let base = wi * 8;
+                let base = wi * LANE_BYTES;
                 for (bi, &b) in wb.iter().enumerate() {
                     x = x.wrapping_add(row[base + bi][b as usize]);
                 }
@@ -202,7 +191,6 @@ impl Sumhash {
                 x = x.wrapping_add(row[state_bytes + j][b as usize]);
             }
 
-            // Assign `u64` value at current output index
             self.out[i] = x;
         }
 
@@ -212,7 +200,7 @@ impl Sumhash {
         self.state.copy_from_slice(&self.out);
     }
 
-    /// Updates the hasher by feeding `data` into it's state, compressing any full blocks.
+    /// Updates the hasher by feeding `data` into its state, compressing any full blocks.
     pub(crate) fn update(&mut self, data: &[u8]) {
         // The `total_len` is converted to bits (<<3) in `finalize()`,
         // so it must fit in 61 bits.
@@ -221,10 +209,7 @@ impl Sumhash {
             "input too large: total_len << 3 would overflow u64 in finalize"
         );
 
-        // Increment `total_len` by data length amount
         self.total_len += data.len() as u64;
-
-        // Make data mutable
         let mut data = data;
 
         // If there is a partial block in the buffer, fill it first.
@@ -235,7 +220,6 @@ impl Sumhash {
             self.pos += n;
             data = &data[n..];
 
-            // If position is equal to the buffer length, apply compression and reset `pos` cursor
             if self.pos == self.buf.len() {
                 // Clone to avoid holding `&self.buf` across `&mut self.compress()`.
                 let block = self.buf.clone();
@@ -258,7 +242,7 @@ impl Sumhash {
         }
     }
 
-    /// Resets the hasher to a fresh, zeroed state, making same instance reusable without full reconstruction.
+    /// Resets the hasher to a fresh, zeroed state, making the same instance reusable without full reconstruction.
     pub(crate) fn reset(&mut self) {
         self.state.fill(0);
         self.buf.fill(0);
@@ -278,45 +262,32 @@ impl Sumhash {
     ///    zero-fill a fresh block up to `P`.
     /// 4. Write `total_len * 8` (bit count) as two LE `u64`s in `buf[P..B]`.
     /// 5. Compress the final padded block.
-    /// 6. Serialize the state words as LE `u64`s into `out`.
+    /// 6. Serialize the state lanes as LE `u64`s into `out`.
     pub(crate) fn finalize(&mut self, out: &mut [u8]) {
         let b = self.buf.len();  // block size
-        let p = b - 16;  // padding threshold: last 16 bytes hold the length
+        let p = b - 2 * LANE_BYTES;  // last 2 lanes hold the bit-length field
 
-        // Step 1:
-        // Insert sentinel byte `0x01` (00000001, LE bit order) at `buf[pos]`.
-        // This is used as a mark to separate the actual data from the start
-        // of the padding scheme.
+        // 1. Sentinel byte at pos.
         self.buf[self.pos] = 0x01;
 
-        // Step 2
-        // If the cursor position is less than the padding threshold.
+        // 2. Zero-fill to the length field, compressing an overflow block if needed.
         if self.pos < p {
-            // Zero-fill from `pos+1` up to the length field.
             self.buf[self.pos + 1..p].fill(0);
-        // Step 3
-        // Else, not enough room for the 16-byte length field in this block.
         } else {
-            // Zero-fill the rest of the block, compress it, then start a fresh block.
             self.buf[self.pos + 1..b].fill(0);
             let block = self.buf.clone();
             self.compress(&block);
             self.buf[0..p].fill(0);
         }
 
-        // Step 4:
-        // Encode bit length as two little-endian `u64`s.
-        let bit_len = self.total_len << 3;  // convert length bytes into bits
+        // 3. Encode bit count as two LE u64s and compress the final block.
+        let bit_len = self.total_len << 3;
         self.buf[p..p + 8].copy_from_slice(&bit_len.to_le_bytes());  // low 64 bits
-        self.buf[p + 8..b].copy_from_slice(&0u64.to_le_bytes());  // high 64 bits (always 0)
-
-        // Step 5:
-        // Compress the final block
+        self.buf[p + 8..b].copy_from_slice(&0u64.to_le_bytes());      // high 64 bits (always 0)
         let block = self.buf.clone();
         self.compress(&block);
 
-        // Step 6:
-        // Serialize the final state into the output buffer.
+        // 4. Serialise the final state into the output buffer.
         for (chunk, &w) in out.chunks_mut(8).zip(self.state.iter()) {
             chunk.copy_from_slice(&w.to_le_bytes());
         }
@@ -325,12 +296,12 @@ impl Sumhash {
 
 // ── Sumhash512 ────────────────────────────────────────────────────────────────
 
-/// `Sumhash` instantiated with Algorand's fixed parameters: `n=8` output words,
+/// `Sumhash` instantiated with Algorand's fixed parameters: `n=8` output lanes,
 /// `m=1024`-bit input block, `seed=b"Algorand"` for domain separation.
 ///
-/// The matrix derived from [xof::Shake256] is 8 × 1024 `u64` entries;
+/// The matrix derived from [`xof::Shake256`] is 8 × 1024 `u64` entries;
 /// each 64-byte message block is compressed with the 64-byte chaining value
-/// to produce 8 × 64-bit words = 512 bits of output.
+/// to produce 8 × 64-bit lanes = 512 bits of output.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Sumhash512(pub(crate) Sumhash);
 
@@ -343,7 +314,7 @@ impl fmt::Debug for Sumhash512 {
 impl Sumhash512 {
     /// Returns a new instance of the hasher.
     pub fn new() -> Self {
-        let inner = Sumhash::new(8, 1024, b"Algorand");
+        let inner = Sumhash::new(8, 1024, b"Algorand"); // n=8 lanes, m=1024-bit matrix
         Self(inner)
     }
 
@@ -352,7 +323,7 @@ impl Sumhash512 {
         self.0.update(data);
     }
 
-    /// Resets the hasher to a fresh, zeroed state, making same instance reusable without full reconstruction.
+    /// Resets the hasher to a fresh, zeroed state, making the same instance reusable without full reconstruction.
     pub fn reset(&mut self) {
         self.0.reset();
     }
@@ -381,6 +352,8 @@ impl Default for Sumhash512 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
+    use alloc::string::String;
 
     const TEST_MSG: &[u8] = b"hello";
 
@@ -390,7 +363,7 @@ mod tests {
     /// ```text
     /// Derived values:
     /// m_bytes = 1024 / 8 = 128
-    /// state words = n = 8
+    /// state lanes = n = 8
     /// block_size  = m_bytes - n × 8 = 64
     /// ```
     #[test]
