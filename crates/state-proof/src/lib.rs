@@ -36,29 +36,10 @@ mod codec;
 mod light_block_header;
 mod stateproof;
 
-// ── Re-exports from merkle ────────────────────────────────────────────────────
-// Sumhash512Digest / SUMHASH512_DIGEST_SIZE are part of the public API:
-// `verify_state_proof` takes `part_commitment: &Sumhash512Digest`, so callers
-// must be able to name and construct the type.
-// HashFactory / HashType / Proof are exposed so callers can inspect the
-// `sig_proofs` / `part_proofs` fields of a decoded `StateProof`.
 pub use merkle::{HashFactory, HashType, Proof, Sha256, Sumhash512Digest, SHA256_DIGEST_SIZE, SUMHASH512_DIGEST_SIZE};
-
-// ── Re-exports from algorand-falcon-keys ─────────────────────────────────────
-// Exposed so callers can inspect `MerkleSignatureScheme` fields
-// (verifying_key: FalconPublicKey, sig: FalconCompressedSig).
-pub use algorand_falcon_keys::{
-    CompressedSignature as FalconCompressedSig,
-    PublicKey as FalconPublicKey,
-};
-
-// ── Codec error ───────────────────────────────────────────────────────────────
+pub use algorand_falcon_keys::{CompressedSignature as FalconCompressedSig, PublicKey as FalconPublicKey};
 pub use codec::DecodeError;
-
-// ── Light block header and downstream commitment verification ─────────────────
 pub use light_block_header::{LightBlockHeader, verify_block_header_commitment, verify_txn_commitment};
-
-// ── State proof types and verifier ───────────────────────────────────────────
 pub use stateproof::{
     MessageHash,
     StateProofMessage, TrustAnchor,
