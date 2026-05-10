@@ -1,8 +1,10 @@
 // crates/merkle/src/lib.rs
+
+#![no_std]
 extern crate alloc;
 
+use alloc::{collections::BTreeMap, vec, vec::Vec};
 use core::fmt;
-use alloc::collections::BTreeMap;
 
 use sha2::Digest as Sha2Digest;
 pub use sha2::Sha256;
@@ -12,7 +14,7 @@ pub use sumhash::{Sumhash512, Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
 
 // ── SHA-256 constants ──────────────────────────────────────────────────────────
 
-/// Byte length of a SHA-256 digest (32 bytes = 256 bits = 8 × 32-bit words).
+/// Byte length of a SHA-256 digest (32 bytes = 256 bits).
 pub const SHA256_DIGEST_SIZE: usize = 32;
 
 // ── Merkle constants ───────────────────────────────────────────────────────────
@@ -20,7 +22,7 @@ pub const SHA256_DIGEST_SIZE: usize = 32;
 /// Domain prefix for internal Merkle tree nodes: `Sumhash("MA" || left || right)`.
 pub const MERKLE_INTERNAL_NODE: &[u8] = b"MA";
 
-/// Domain prefix for empty padding leaves in a [VcTree]: `Hash("MB")`.
+/// Domain prefix for empty padding leaves in a [`VcTree`]: `Hash("MB")`.
 ///
 /// Ensures unfilled positions have a deterministic, consistent representation.
 /// Also used as the signature-slot leaf for participants who did not sign.
@@ -33,11 +35,11 @@ pub const MERKLE_VC_BOTTOM_LEAF: &[u8] = b"MB";
 #[repr(u64)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HashType {
-    /// NOTE: This hash type is currently not supported by as a Merkle hash function
+    /// Not supported as a `MerkleHasher`.
     Sha512_256 = 0,
     Sumhash512 = 1,
     Sha256 = 2,
-    /// NOTE: This hash type is currently not supported by as a Merkle hash function
+    /// Not supported as a `MerkleHasher`.
     Sha512 = 3,
 }
 
@@ -54,7 +56,7 @@ impl TryFrom<u64> for HashType {
     }
 }
 
-/// Identifies which [HashType] was used to build the tree.
+/// Identifies which [`HashType`] was used to build the tree.
 ///
 /// Codec key: `"hsh"`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,7 +65,7 @@ pub struct HashFactory {
 }
 
 impl HashFactory {
-    /// Returns a `HashFactory` for [Sumhash512].
+    /// Returns a `HashFactory` for [`Sumhash512`].
     /// Used for:
     /// * Participant Commitment: `Sumhash512("spp" || W || KLT || StateProofPK)`.
     /// * Signature Array Commitment: `Sumhash512("sps" || L || SerializedMerkleSignature)`.
@@ -102,19 +104,19 @@ pub trait Hashable {
 ///
 /// Implementations are expected to be reusable: `finalize_reset` produces the
 /// digest and immediately resets the internal state for the next computation.
-/// For [Sumhash512] this preserves the expensive lookup table; for [Sha256] the
+/// For [`Sumhash512`] this preserves the expensive lookup table; for [`Sha256`] the
 /// reset is a trivial swap since initialization is cheap.
 pub trait MerkleHasher: Sized {
     /// The fixed-size digest produced by this hasher.
     type Digest: Copy + Eq + PartialEq + core::fmt::Debug + AsRef<[u8]>;
 
-    /// The identifier for this hasher, used to populate [HashFactory].
+    /// The identifier for this hasher, used to populate [`HashFactory`].
     const HASH_TYPE: HashType;
 
-    /// The all-zero digest used to pad incomplete tree levels in [Tree].
+    /// The all-zero digest used to pad incomplete tree levels in [`Tree`].
     ///
-    /// Not used by [VcTree], which pads with `Hash("MB")` instead — but all
-    /// [MerkleHasher] implementations must provide it so [Tree] can be built
+    /// Not used by [`VcTree`], which pads with `Hash("MB")` instead — but all
+    /// [`MerkleHasher`] implementations must provide it so [`Tree`] can be built
     /// with any hasher.
     const ZERO_DIGEST: Self::Digest;
 
@@ -173,7 +175,7 @@ impl MerkleHasher for Sha256 {
 /// Hashes `obj` into a digest, reusing `h` across calls.
 ///
 /// Calls `obj.hash_into(h)`, which feeds domain and data directly into the hasher
-/// then finalizes and resets. For [Sumhash512], reusing `h` avoids rebuilding
+/// then finalizes and resets. For [`Sumhash512`], reusing `h` avoids rebuilding
 /// the expensive lookup table.
 pub fn hash_obj<H: MerkleHasher>(h: &mut H, obj: &impl Hashable) -> H::Digest {
     obj.hash_into(h);
@@ -188,7 +190,7 @@ fn hash_internal_node<H: MerkleHasher>(h: &mut H, left: &H::Digest, right: &H::D
     h.finalize_reset()
 }
 
-/// Computes `Hash("MB")` — the canonical empty-padding digest for [VcTree] leaves.
+/// Computes `Hash("MB")` — the canonical empty-padding digest for [`VcTree`] leaves.
 fn hash_vc_bottom_leaf<H: MerkleHasher>(h: &mut H) -> H::Digest {
     h.update(MERKLE_VC_BOTTOM_LEAF);
     h.finalize_reset()
@@ -206,7 +208,7 @@ fn vc_index(idx: usize, depth: u8) -> usize {
 }
 
 /// Builds the level vector bottom-up from `leaf_level`, padding odd-width levels with `pad`.
-/// Shared by [Tree] and [VcTree]; the caller provides the appropriate pad digest.
+/// Shared by [`Tree`] and [`VcTree`]; the caller provides the appropriate pad digest.
 fn build_levels<H: MerkleHasher>(h: &mut H, leaf_level: Vec<H::Digest>, pad: H::Digest) -> Vec<Vec<H::Digest>> {
     let mut levels = vec![leaf_level];
 
@@ -231,18 +233,18 @@ fn build_levels<H: MerkleHasher>(h: &mut H, leaf_level: Vec<H::Digest>, pad: H::
 
 // ── Tree ──────────────────────────────────────────────────────────────────────
 
-/// A membership binary Merkle tree built over a slice of [Hashable] leaves.
+/// A membership binary Merkle tree built over a slice of [`Hashable`] leaves.
 ///
 /// `levels[0]` holds the leaf digests; `levels[last]` holds the single root digest.
 /// Odd-width levels are padded with a zero-digest right sibling.
 ///
-/// For Vector Commitment index-based proving scheme use [VcTree].
+/// For Vector Commitment index-based proving scheme use [`VcTree`].
 pub struct Tree<H: MerkleHasher> {
     levels: Vec<Vec<H::Digest>>,
 }
 
 impl<H: MerkleHasher> Tree<H> {
-    /// Builds a `Tree` from a slice of [Hashable] leaves.
+    /// Builds a `Tree` from a slice of [`Hashable`] leaves.
     pub fn build<T: Hashable>(leaves: &[T]) -> Self {
         if leaves.is_empty() { return Self { levels: vec![] }; }
         let mut h = H::init();
@@ -278,20 +280,20 @@ impl<H: MerkleHasher> Tree<H> {
 
 // ── VcTree ────────────────────────────────────────────────────────────────────
 
-/// A vector commitment scheme [Tree] built over a slice of [Hashable] leaves.
+/// A vector commitment scheme [`Tree`] built over a slice of [`Hashable`] leaves.
 ///
 /// Leaves are placed at bit-reversed positions and padded to the next power of
 /// two with `Hash("MB")`, matching Algorand's VC spec.
 ///
-/// Distinct from [Tree] to prevent accidentally mixing membership Merkle proofs
-/// with VC proofs — proofs from [VcTree::prove] must be verified via [Proof::verify_vc].
+/// Distinct from [`Tree`] to prevent accidentally mixing membership Merkle proofs
+/// with VC proofs — proofs from [`VcTree::prove`] must be verified via [`Proof::verify_vc`].
 pub struct VcTree<H: MerkleHasher> {
     inner: Tree<H>,
     leaf_count: usize,
 }
 
 impl<H: MerkleHasher> VcTree<H> {
-    /// Builds a `VcTree` from a slice of [Hashable] leaves.
+    /// Builds a `VcTree` from a slice of [`Hashable`] leaves.
     pub fn build<T: Hashable>(leaves: &[T]) -> Self {
         if leaves.is_empty() { return Self { inner: Tree { levels: vec![] }, leaf_count: 0 }; }
         let leaf_count = leaves.len();
@@ -318,7 +320,7 @@ impl<H: MerkleHasher> VcTree<H> {
     /// Returns the VC sibling path for external leaf `index`.
     ///
     /// Bounds-checks against the original leaf count, not the padded capacity.
-    /// Proofs produced here must be verified with [Proof::verify_vc].
+    /// Proofs produced here must be verified with [`Proof::verify_vc`].
     pub fn prove(&self, index: usize) -> Option<Proof<H>> {
         if self.inner.levels.is_empty() || index >= self.leaf_count { return None; }
         let last_level_idx = self.inner.levels.len() - 1;
@@ -340,8 +342,8 @@ impl<H: MerkleHasher> VcTree<H> {
 
 /// A Merkle proof (authentication/inclusion path) for verifying a leaf in a hash tree.
 ///
-/// Generic over the [MerkleHasher] `H` so the same type serves both
-/// [Sumhash512]-based state-proof trees and [Sha256]-based block-header trees.
+/// Generic over the [`MerkleHasher`] `H` so the same type serves both
+/// [`Sumhash512`]-based state-proof trees and [`Sha256`]-based block-header trees.
 pub struct Proof<H: MerkleHasher> {
     /// The depth of the tree (number of levels from leaf to root).
     pub tree_depth: u8,
@@ -385,13 +387,13 @@ impl<H: MerkleHasher> PartialEq for Proof<H> {
 
 impl<H: MerkleHasher> Proof<H> {
     /// Creates a new `Proof` from `tree_depth` and sibling `path`.
-    /// The [HashFactory] is derived automatically from `H::HASH_TYPE`.
+    /// The [`HashFactory`] is derived automatically from `H::HASH_TYPE`.
     pub fn new(tree_depth: u8, path: Vec<H::Digest>) -> Self {
         Self { tree_depth, path, hash_factory: HashFactory { hash_type: H::HASH_TYPE } }
     }
 
     /// Low-level verify using a caller-supplied hasher. Reuse the same `h` across
-    /// multiple proof verifications to avoid rebuilding the [Sumhash512] lookup table.
+    /// multiple proof verifications to avoid rebuilding the [`Sumhash512`] lookup table.
     ///
     /// `hash_factory` is for encoding/decoding only and has no runtime effect here;
     /// the hasher is determined entirely by the type parameter `H`.
@@ -407,32 +409,32 @@ impl<H: MerkleHasher> Proof<H> {
     }
 
     /// Reconstructs the root from the proof path and returns `true` if it matches `root`.
-    /// For proofs produced by [VcTree::prove] use [verify_vc](Self::verify_vc) instead.
+    /// For proofs produced by [`VcTree::prove`] use [`verify_vc`](Self::verify_vc) instead.
     pub fn verify(&self, leaf: H::Digest, index: usize, root: &H::Digest) -> bool {
         let mut h = H::init();
         self.verify_with(leaf, index, root, &mut h)
     }
 
     /// Verifies a VC proof using a caller-supplied hasher, avoiding a fresh 
-    /// [Sumhash512] construction when verifying many proofs in sequence.
+    /// [`Sumhash512`] construction when verifying many proofs in sequence.
     ///
     /// Translates external `index` to its bit-reversed internal position, then
-    /// delegates to [verify_with](Self::verify_with).
+    /// delegates to [`verify_with`](Self::verify_with).
     pub fn verify_vc_with(&self, leaf: H::Digest, index: usize, root: &H::Digest, h: &mut H) -> bool {
         self.verify_with(leaf, vc_index(index, self.tree_depth), root, h)
     }
 
-    /// Verifies a proof produced by [VcTree::prove].
+    /// Verifies a proof produced by [`VcTree::prove`].
     ///
     /// Translates external `index` to its bit-reversed internal position, then
-    /// delegates to [verify_with](Self::verify_with).
+    /// delegates to [`verify_with`](Self::verify_with).
     pub fn verify_vc(&self, leaf: H::Digest, index: usize, root: &H::Digest) -> bool {
         let mut h = H::init();
         self.verify_vc_with(leaf, index, root, &mut h)
     }
 
     /// Verifies a batch of `elems` that share the same `Proof` path for a standard
-    /// membership [Tree]. Path elements are consumed greedily in sorted-position order.
+    /// membership [`Tree`]. Path elements are consumed greedily in sorted-position order.
     ///
     /// Returns `false` if the path contains unused elements after all levels are processed,
     /// so callers cannot append garbage to a valid proof and have it accepted.
@@ -440,7 +442,7 @@ impl<H: MerkleHasher> Proof<H> {
     /// If `elems` contains duplicate indices the last entry for that index wins silently;
     /// callers are responsible for ensuring indices are unique.
     ///
-    /// For [VcTree] use [verify_batch_vc](Self::verify_batch_vc), which handles bit-reversal automatically.
+    /// For [`VcTree`] use [verify_batch_vc](Self::verify_batch_vc), which handles bit-reversal automatically.
     pub fn verify_batch(&self, elems: &[(usize, H::Digest)], root: &H::Digest) -> bool {
         if elems.is_empty() { return self.path.is_empty(); }
         let depth = self.tree_depth as usize;
@@ -466,10 +468,10 @@ impl<H: MerkleHasher> Proof<H> {
         level.len() == 1 && level.values().next().unwrap() == root && path_iter.next().is_none()
     }
 
-    /// Verifies a batch of `elems` that share the same `Proof` path for a [VcTree].
+    /// Verifies a batch of `elems` that share the same `Proof` path for a [`VcTree`].
     ///
     /// Converts external sequential indices to bit-reversed internal positions,
-    /// then delegates to [verify_batch](Self::verify_batch).
+    /// then delegates to [`verify_batch`](Self::verify_batch).
     pub fn verify_batch_vc(&self, elems: &[(usize, H::Digest)], root: &H::Digest) -> bool {
         let depth = self.tree_depth;
         let internal: Vec<(usize, H::Digest)> = elems.iter()
