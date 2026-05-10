@@ -13,3 +13,4 @@ edition = "2024"
 authors = ["th0tmaker"]
 license = "MIT"
 repository = "https://github.com/th0tmaker/algorand-state-proof"
+publish = false
