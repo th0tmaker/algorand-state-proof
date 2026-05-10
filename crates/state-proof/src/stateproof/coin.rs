@@ -21,26 +21,20 @@ pub fn ln_int_approximation(x: u64) -> Option<u64> {
 }
 
 // ── CoinChoiceSeed ────────────────────────────────────────────────────────────
-///
-/// The input seed absorbed by [Shake256](xof::Shake256) inside the `CoinGenerator`.
-/// A coin is used to pseudorandomly select which signatures get revealed during
-/// [StateProof](crate::StateProof) validation.
+
+/// The input seed absorbed by [`xof::Shake256`] inside the [`CoinGenerator`].
+/// Each field contributes to the pseudorandom coin stream that selects which
+/// [`crate::Reveal`] positions are checked during [`crate::StateProof`] verification.
 pub struct CoinChoiceSeed {
-    /// 512-bit `Sumhash512` hash digest vector commitment root on the participant array.
+    /// `Sumhash512` VC root over the participants array.
     pub part_commitment: Sumhash512Digest,
-    /// Real number encoded as a fixed-point integer with 16-bit precision that 
-    /// represents the natural log of `proven_weight`
-    /// 
-    /// Formula: `ceil(2^16 * ln(proven_weight))`.
-    /// 
-    /// This number is stored inside a 64-bit LE integer for safety insurance and compatibility.
+    /// Fixed-point encoding of `ln(proven_weight)`: `ceil(2^16 · ln(proven_weight))`.
     pub ln_proven_weight: u64,
-    /// 512-bit `Sumhash512` hash digest vector commitment root on the signature array
+    /// `Sumhash512` VC root over the signature array.
     pub sig_commitment: Sumhash512Digest,
-    /// 64-bit LE integer representing total (stake) signed weight of all participants 
-    /// whose signatures appear in `StateProof` the signature array.
+    /// Total stake of all signers in the proof.
     pub signed_weight: u64,
-    /// 256-bit `SHA-256` hash digest of the state proof message being attested to.
+    /// `SHA-256` digest of the state proof message being attested to.
     pub message_hash: MessageHash,
 }
 
@@ -73,55 +67,39 @@ impl CoinChoiceSeed {
 /// returned as `sample % signed_weight`.
 #[derive(Debug)]
 pub struct CoinGenerator {
-    /// The `Shake256` sponge construction extendable output function (XOF).
     xof: Shake256,
-    /// Total stake weight of signers only.
     signed_weight: u64,
     /// Largest multiple of `signed_weight` that fits in a u64 — the rejection boundary.
     threshold: u128,
 }
 
 impl CoinGenerator {
-    /// Creates a new instance of `CoinGenerator` from a `CoinChoiceSeed`
+    /// Constructs a new instance of `CoinGenerator` from `seed`.
     pub fn new(seed: &CoinChoiceSeed) -> Self {
-        // Create a new instance of `Shake256`, absord the seed bytes and flip to squeeze mode.
         let mut xof = Shake256::new();
         xof.absorb(&seed.to_bytes());
         xof.flip();
 
-        // Get the seed total signed weight
         let signed_weight = seed.signed_weight;
 
         /* NOTE: Rejection sampling threshold; ensures uniform distribution over [0, signed_weight).
         Naively taking a random `u64 % signed_weight` is biased — lower values appear slightly more often
-        because 2^64 is rarely divisible by  `signed_weight`. The leftover region (2^64 % signed_weight)
+        because 2^64 is rarely divisible by `signed_weight`. The leftover region (2^64 % signed_weight)
         maps to values [0, remainder) twice.
-        
+
         Fix: only accept samples below threshold = `floor(2^64 / signed_weight) * signed_weight`.
         That is an exact multiple of `signed_weight`, so `sample % signed_weight` is uniform.
         Samples in [threshold, 2^64) are discarded and re-squeezed.
-        
+
         Computed in u128 to avoid overflow (1u128 << 64 = 2^64 exactly). */
         let k = (1u128 << u64::BITS) / signed_weight as u128;
         let threshold = k * signed_weight as u128;
 
-        // Wrap `xof`, `signed_weight` and `threshold` into the type and return
         Self { xof, signed_weight, threshold }
     }
 
-    /// Generates the next unbiased “coin” index in the range `[0, signed_weight)`.
-    ///
-    /// This uses `Shake256` randomness and rejection sampling to avoid modulo bias:
-    ///
-    /// 1. A 64-bit random sample is drawn from the XOF stream.
-    /// 2. The sample is accepted only if it lies in the largest multiple of
-    ///    `signed_weight` that fits within `u64` (the `threshold`).
-    /// 3. Once accepted, the sample is reduced with `sample % signed_weight`,
-    ///    which is unbiased due to the rejection step.
-    ///
-    /// Returns a uniformly distributed integer in `[0, signed_weight)`.
+    /// Returns the next uniformly distributed coin in `[0, signed_weight)`.
     pub fn next_coin(&mut self) -> u64 {
-        // Keep looping until we get an acceptable value.
         loop {
             let mut buf = [0u8; 8];
             self.xof.squeeze(&mut buf);
@@ -186,7 +164,7 @@ mod tests {
     fn different_seeds_produce_different_coins() {
         let seed_a = make_test_seed(1_000_000);
         let seed_b = CoinChoiceSeed {
-             sig_commitment: [9u8; 64],
+            sig_commitment: [9u8; 64],
             ..make_test_seed(1_000_000)
         };
 
