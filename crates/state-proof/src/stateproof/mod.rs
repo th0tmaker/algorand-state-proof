@@ -86,14 +86,12 @@ impl MsgPackDecode for CompressedSignature {
 /// Wire codec keys: `"cmt"`, `"lf"`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MerkleVerifier {
-    /// 512-bit `Sumhash512` hash digest vector commitment root on Merkle tree built over all 
-    /// the FALCON ephemeral public/verifying keys for a participant's entire participation period.
+    /// `Sumhash512` VC root over all ephemeral public keys for the participant's participation period.
     ///
     /// Wire codec key: `"cmt"`.
     pub commitment: Sumhash512Digest,
-    /// Participant verifying `PublicKey` at index `i` is valid for signing rounds
-    /// in `[r, r + key_lifetime - 1]`, where `r` is the `i`-th round satisfying
-    /// `r % key_lifetime = 0` within the participation period.
+    /// Number of consecutive rounds each ephemeral key covers. Determines key epoch boundaries —
+    /// see [`key_epoch_start`](Self::key_epoch_start).
     ///
     /// Wire codec key: `"lf"`.
     pub key_lifetime: u64,
@@ -104,7 +102,7 @@ impl MerkleVerifier {
     ///
     /// Snaps `round` down to the nearest multiple of `key_lifetime` — the epoch
     /// boundary at which the corresponding ephemeral key was generated. This is
-    /// the round encoded in the `EphemeralKeyLeaf` when verifying the VC Merkle proof.
+    /// the round encoded in the ephemeral key VC leaf when verifying the MSS proof.
     pub(crate) fn key_epoch_start(&self, round: u64) -> u64 {
         if self.key_lifetime == 0 { return round; }
         round - (round % self.key_lifetime)
@@ -158,7 +156,7 @@ pub struct MerkleSignatureScheme {
     ///
     /// Derived from the signed round: `round / key_lifetime`. Used together
     /// with `proof` to authenticate `verifying_key` against
-    /// `MerkleVerifier::commitment.
+    /// [`MerkleVerifier::commitment`].
     ///
     /// Wire codec key: `"idx"`.
     pub vc_index: u64,
