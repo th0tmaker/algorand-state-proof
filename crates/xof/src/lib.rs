@@ -1,5 +1,7 @@
 // crates/xof/src/lib.rs
 
+#![no_std]
+
 mod zeroize;
 pub use zeroize::Zeroize;
 
