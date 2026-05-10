@@ -8,55 +8,18 @@ use crate::stateproof::constants::{DOMAIN_LIGHT_BLOCK_HEADER, DOMAIN_TXN_LEAF};
 
 // ── LightBlockHeader ──────────────────────────────────────────────────────────
 
-/// ## Overview
-/// 
-/// A stripped-down (light) subset of an Algorand block header containing only the
-/// fields required to verify block inclusion inside a `StateProof` interval.
+/// Minimal subset of an Algorand block header containing only the fields needed
+/// to verify inclusion in [`StateProofMessage::block_headers_commitment`].
 ///
-/// - **Block seed**: A 32-byte `SHA-512/256` digest derived from the proposer’s VRF output.
-/// - **Block hash**: A 32-byte `SHA-512/256` digest of this block header. This becomes the
-///   `prev` field in the next block, linking the chain.
-/// - **Genesis hash**: A 32-byte `SHA-512/256` digest identifying the genesis configuration
-///   of the ledger.
-/// - **Round**: The block round number (`u64`).
-/// - **Transaction commitment**: A 32-byte `SHA-256` digest representing the vector
-///   commitment root over the block’s transactions.
+/// Hashed as a `"B256"` VC leaf: `SHA-256("B256" || canonical_msgpack(LightBlockHeader))`.
+/// Verified with [`verify_block_header_commitment`].
 ///
-/// ## Role in State Proofs
-/// 
-/// A `LightBlockHeader` is a key component in the Algorand State Proof verification process.
+/// Exactly one of `seed` or `block_hash` is populated depending on the consensus
+/// protocol version; the other must be `[0u8; 32]`. The algod API does not
+/// return a `LightBlockHeader` directly — it must be constructed from the block
+/// header response fields.
 ///
-/// It is part of the data that gets turned into a leaf that makes up the `block_headers_commitment` vector commitment Merkle tree:
-/// 
-/// The leaf value is computed via the following formula `SHA256("B256" || canonical_msgpack(LightBlockHeader))`: 
-///
-/// 1. The `LightBlockHeader` is encoded using the canonical AlgorandMessagePack.
-/// 2. The domain separation prefix `b"B256"` is prepended.
-/// 3. The resulting bytes are hashed with `SHA-256`.
-///
-/// This resulting hash digest ends up as one of several leafs in a VC Merkle tree covering 256 consecutive block headers. 
-/// The final root value of this tree is the [`block_headers_commitment`](crate::StateProofMessage::block_headers_commitment)
-///
-/// ## Relevant endpoints
-/// 
-/// - `GET /v2/blocks/{round}`. Retrieves the full block data (header + transactions). 
-/// - `GET /v2/blocks/{round}?header-only=true`. Retrieves only the block header (no transactions).
-/// - `GET /v2/blocks/{round}/lightheader/proof`. Computes the VC tree path and outputs the proof, 
-///   tree depth and the index position of the block within the tree.
-///
-/// NOTE: Algod daemon does not provide a `LightBlockHeader` directly. It must be
-/// constructed locally by extracting and re-encoding the relevant fields
-/// from the block header response.
-/// 
-/// ## Verification
-/// 
-/// Verify inclusion using `verify_block_header_commitment`, which checks that
-/// the constructed `LightBlockHeader` is included in the 256-block interval
-/// committed to by the state proof (via `block_headers_commitment`).
-/// 
-/// ## Wire codec keys
-/// 
-/// `"0"`, `"1"`, `"gh"`, `"r"`, `"tc"`
+/// Wire codec keys: `"0"`, `"1"`, `"gh"`, `"r"`, `"tc"`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LightBlockHeader {
     /// 256-bit `SHA-512/256` hash digest acting as the block seed value.
@@ -67,7 +30,7 @@ pub struct LightBlockHeader {
     /// 
     /// Wire codec key: `"1"`.
     pub block_hash: [u8; SHA256_DIGEST_SIZE],
-    /// 256-bit `SHA-512/256` hash digest of the ledger genesis, indentifying the unique network instance.
+    /// 256-bit `SHA-512/256` hash digest of the ledger genesis, identifying the unique network instance.
     ///
     /// Wire codec key: `"gh"`.
     pub genesis_hash: [u8; SHA256_DIGEST_SIZE],
@@ -116,8 +79,6 @@ impl LightBlockHeader {
     pub fn from_msgpack(bytes: &[u8]) -> Result<Self, DecodeError> {
         Self::decode(bytes)
     }
-    
-
 }
 
 impl MsgPackDecode for LightBlockHeader {
@@ -178,34 +139,12 @@ impl Hashable for LightBlockHeader {
 
 // ── VerifyBlockHeader ─────────────────────────────────────────────────────────
 
-/// ## Overview
-/// 
-/// Verifies that a [`LightBlockHeader`] is included among the block headers
-/// attested to by a State Proof interval at the specified `index` by validating 
-/// its Merkle (vector commitment) proof against the commitment tree root.
+/// Verifies that `header` is included at `index` in the block headers VC tree.
 ///
-/// ## Parameters
-///
-/// - `header`: The [`LightBlockHeader`] for the block being proven. Construct it
-///   from block data fetched via `GET /v2/blocks/{round}?header-only=true`. The 
-///   consensus protocol version determines which field is populated: New version
-///   uses `block_hash` while old version uses `seed`. The unused field must be `[0u8; 32]`.
-///
-/// - `index`: Zero-based position of the block in the 256-round interval
-///   (`0 ≤ index < 256`), equal to `round − first_attested_round`. Can be
-///   computed via [`block_index_for_round`](crate::StateProofMessage::block_index_for_round)..
-///
-/// - `proof`: SHA-256 Merkle proof for this block header. Fetch via
-///   `GET /v2/blocks/{round}/lightheader/proof`.
-///
-/// - `commitment`: The SHA-256 digest of the (vector commitment) Merkle tree root over all 
-///   256 light block headers in the interval; equals
-///   [`block_headers_commitment`](crate::StateProofMessage::block_headers_commitment).
-///
-/// ## Output
-///
-/// Retuns `true` if the proof is valid and `header` is included among the block headers
-/// atteset to by a State Proof interval at the specified `index`. Otherwise, returns `false`.
+/// `commitment` is [`StateProofMessage::block_headers_commitment`]; `proof` is
+/// fetched from `GET /v2/blocks/{round}/lightheader/proof`. `index` equals
+/// `round − first_attested_round` — compute it via
+/// [`StateProofMessage::block_index_for_round`].
 pub fn verify_block_header_commitment(
     header: &LightBlockHeader,
     index: usize,
@@ -220,46 +159,19 @@ pub fn verify_block_header_commitment(
 
 // ── VerifyBlockTxn ────────────────────────────────────────────────────────────
 
-/// ## Overview
-/// 
-/// Verifies that a transaction is included at the specified `index` among 
-/// the block transactions by validating its Merkle (vector commitment) proof 
-/// against the commitment tree root
+/// Verifies that a transaction is included at `index` in a block’s transaction VC tree.
 ///
-/// ## Parameters
+/// `txn_sha256` = `SHA-256("TX" || canonical_msgpack(txn))` — **NOTE**: `SHA-256`, not 
+/// the `SHA-512/256` hash algorithm used to produce an Algorand transaction ID.
+/// Transaction bytes must include `gh` and `gen` fields that block storage strips.
 ///
-/// - `txn_sha256`: The digest of `SHA-256("TX" || canonical_msgpack(txn))`.
-/// 
-///   **Note**: Not to be mistaken with the digest of `SHA-512/256("TX" || canonical_msgpack(txn))`,
-///   which is the canonical way of computing the bytes that end up being `base32` encoded into a
-///   valid transaction id on Algorand.
-/// 
-///   **Note2**: The transaction bytes must include `gh` (genesis hash) 
-///   and `gen` (genesis ID), which block storage strips. 
+/// `stib_sha256` = `SHA-256("STIB" || Sig(Tx) || ApplyData)` — fetch via
+/// `GET /v2/blocks/{round}/transactions/{txid}/proof?hashtype=sha256`.
 ///
-/// - `stib_sha256`: The digest of `SHA-256("STIB" || Sig(Tx) || ApplyData)`. 
-///   Fetch via `GET /v2/blocks/{round}/transactions/{txid}/proof?hashtype=sha256`.
-///   
-///   * `Sig(Tx)` — Records the authorization data (signature) attached to the transaction.
-///   * `ApplyData` — Records the data revelant to how the transaction was applied to the account state.
-/// 
-/// - `index`: Zero-based position of the transaction within the block’s body
-///   (the payset recording all of the block's transactions). Also returned as 
-///   the `idx` field by the proof endpoint above.
-///
-/// - `proof`: SHA-256 Merkle proof for this transaction. Also returned as 
-///   the `proof` field by the proof endpoint above..
-///
-/// - `commitment`: The SHA-256 digest of the (vector commitment) Merkle tree root over all 
-///   transactions in the block; equals [txn_commitment](`LightBlockHeader::txn_commitment`) 
-///   for the block containing the transaction.
-/// 
-/// ## Output
-///
-/// Retuns `true` if the proof is valid and the transaction is included among the block
-/// transactions at the specified `index`. Otherwise, returns `false`..
+/// `commitment` is [`LightBlockHeader::txn_commitment`] for the block containing
+/// the transaction.
 pub fn verify_txn_commitment(
-    txn_sha256:  [u8; SHA256_DIGEST_SIZE],
+    txn_sha256: [u8; SHA256_DIGEST_SIZE],
     stib_sha256: [u8; SHA256_DIGEST_SIZE],
     index: usize,
     proof: &Proof<Sha256>,

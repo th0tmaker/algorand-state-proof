@@ -15,7 +15,7 @@ use super::{MessageHash, constants::DOMAIN_SP_MSG_HASH};
 /// verifying the *next* State Proof interval.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StateProofMessage {
-    /// 256-bit `Sha256` hash digest vector commitment root on the block header array.
+    /// `SHA-256` VC root over the 256 block headers in this interval.
     ///
     /// Wire codec key: `"b"`.
     pub block_headers_commitment: [u8; SHA256_DIGEST_SIZE],
@@ -25,14 +25,9 @@ pub struct StateProofMessage {
     ///
     /// Wire codec key: `"v"`.
     pub voters_commitment: Sumhash512Digest,
-    /// Real number encoded as a fixed-point integer with 16-bit precision that 
-    /// represents the natural log of `proven_weight`
-    /// 
-    /// Formula: `ceil(2^16 * ln(proven_weight))`.
-    /// 
-    /// This number is stored inside a 64-bit LE integer for safety insurance and compatibility.
-    /// 
-    /// Becomes [ln_proven_weight](TrustAnchor::ln_proven_weight) for verifying the next State Proof.
+    /// Fixed-point encoding of `ln(proven_weight)`: `ceil(2^16 · ln(proven_weight))`.
+    ///
+    /// Becomes [`TrustAnchor::ln_proven_weight`] for verifying the next State Proof.
     ///
     /// Wire codec key: `"P"`.
     pub ln_proven_weight: u64,
@@ -40,9 +35,7 @@ pub struct StateProofMessage {
     ///
     /// Wire codec key: `"f"`.
     pub first_attested_round: u64,
-    /// Last round covered by this interval. 
-    /// 
-    /// Passed as `round` input to `verify_state_proof`.
+    /// Last round covered by this interval.
     ///
     /// Wire codec key: `"l"`.
     pub last_attested_round: u64,
@@ -76,7 +69,8 @@ impl StateProofMessage {
         Sha2Digest::finalize(h).into()
     }
     
-    /// Returns the leaf index (0–255) of `round` in a 256-block interval or `None` if out of range.
+    /// Returns the zero-based leaf index of `round` in this interval, or `None` if
+    /// `round` is outside `[first_attested_round, last_attested_round]`.
     pub fn block_index_for_round(&self, round: u64) -> Option<usize> {
         let idx = round.checked_sub(self.first_attested_round)? as usize;
         if idx > 255 { None } else { Some(idx) }
@@ -181,24 +175,16 @@ mod bytes64 {
 /// `StateProofMessage`. On success, `verify_state_proof` returns the next
 /// `TrustAnchor` (extracted from the current message) for the following call.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct TrustAnchor {
-    /// 512-bit `Sumhash512` hash digest vector commitment root on the participants array
-    /// of the current `StateProof` interval.
+    /// `Sumhash512` VC root over the participants array for the current interval.
     ///
-    /// Sourced from the **previous** `StateProof` message 
-    /// [voters_commitment](StateProofMessage::voters_commitment) field.
+    /// Sourced from the previous [`StateProofMessage::voters_commitment`].
     #[cfg_attr(feature = "serde", serde(with = "bytes64"))]
     pub part_commitment: Sumhash512Digest,
-    /// Real number encoded as a fixed-point integer with 16-bit precision that 
-    /// represents the natural log of `proven_weight`
-    /// 
-    /// Formula: `ceil(2^16 * ln(proven_weight))`.
-    /// 
-    /// This number is stored inside a 64-bit LE integer for safety insurance and compatibility.
-    /// 
-    /// Sourced from the **previous** `StateProof` message 
-    /// [ln_proven_weight](StateProofMessage::ln_proven_weight) field.
+    /// Fixed-point encoding of `ln(proven_weight)`: `ceil(2^16 · ln(proven_weight))`.
+    ///
+    /// Sourced from the previous [`StateProofMessage::ln_proven_weight`].
     pub ln_proven_weight: u64,
 }
 
@@ -272,7 +258,7 @@ mod tests {
     #[test]
     fn trust_anchor_serde_round_trip() {
         let anchor = TrustAnchor {
-            part_commitment:  [0xabu8; 64],
+            part_commitment: [0xabu8; 64],
             ln_proven_weight: 2230322,
         };
         let encoded = serde_json::to_vec(&anchor).unwrap();
