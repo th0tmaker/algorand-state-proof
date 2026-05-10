@@ -1,4 +1,4 @@
-// crates/keccak/src/lib.rs
+// crates/xof/src/lib.rs
 
 mod zeroize;
 pub use zeroize::Zeroize;
@@ -181,12 +181,8 @@ impl Shake256 {
             self.pos += take;
             remaining = &remaining[take..];
 
-            // If the buffer is full (136 bytes = one rate block).
             if self.pos == SHAKE256_RATE {
-                // Process block; XOR it into the state, apply Keccak permutation.
                 self.process_block();
-
-                // Reset buffer and position to zero for the next block.
                 self.buf.fill(0);
                 self.pos = 0;
             }
@@ -216,11 +212,7 @@ impl Shake256 {
             both XORs hit the same byte: 0x1f ^ 0x80 = 0x9f. */
         self.buf[self.pos] ^= 0x1f;  // domain separation + start of padding
         self.buf[SHAKE256_RATE - 1] ^= 0x80;  // end of padding
-        
-        // Process the final (partial) block into the Keccak state.
         self.process_block();
-
-        // Switch to squeeze mode and reset the position to zero.
         self.squeezing = true;
         self.pos = 0;
     }
@@ -287,20 +279,11 @@ mod tests {
     /// buf[135] with nothing in between, which is the smallest valid block.
     /// Expected value from the XKCP reference test vectors (ShortMsgKAT_SHAKE256.txt).
     #[test]
-    fn test_shake256_empty() {
-        // Create a new instance of Shake256
+    fn shake256_empty() {
         let mut xof = Shake256::new();
-
-        // Flip with empty message (no data to absorb).
         xof.flip();
-
-        // Squeeze the first 32 bytes of XOF output.
         let mut out = [0u8; 32];
         xof.squeeze(&mut out);
-
-        // With an empty message the entire 136-byte block is just 0x1f at byte 0
-        // and 0x80 at byte 135, zeros elsewhere. Keccak-f on that padded block
-        // should produce the following bytes deterministically (XKCP ShortMsgKAT_SHAKE256.txt).
         assert_eq!(
             out,
             [0x46, 0xb9, 0xdd, 0x2b, 0x0b, 0xa8, 0x8d, 0x13,
@@ -318,20 +301,12 @@ mod tests {
     /// Expected value from the XKCP reference test vectors
     /// (ShortMsgKAT_SHAKE256.txt, Len=8, Msg=CC).
     #[test]
-    fn test_shake256_absorb() {
-        // Create a new instance of Shake256
+    fn shake256_absorb() {
         let mut xof = Shake256::new();
-
-        // Absorb data then flip (single byte literal 0xCC).
         xof.absorb(&[0xCC]);
         xof.flip();
-
-        // Squeeze the first 32 bytes of XOF output.
         let mut out = [0u8; 32];
         xof.squeeze(&mut out);
-
-        // A mismatch here points to a bug in absorb (bytes written to wrong
-        // buf positions) or the interaction between `absorb` and `flip`.
         assert_eq!(
             out,
             [0xdd, 0xbf, 0x55, 0xdb, 0xf6, 0x59, 0x77, 0xe3,
@@ -347,8 +322,7 @@ mod tests {
     /// message ends exactly on a block boundary.
     /// Expected value from XKCP reference test vectors (ShortMsgKAT_SHAKE256.txt, Len=1088).
     #[test]
-    fn test_shake256_exact_block_absorb() {
-        // Define the 136-byte message
+    fn shake256_exact_block_absorb() {
         #[rustfmt::skip]
         let msg = [
             0xB3, 0x2D, 0x95, 0xB0, 0xB9, 0xAA, 0xD2, 0xA8,
@@ -370,19 +344,11 @@ mod tests {
             0x37, 0x67, 0x4C, 0x6F, 0x8E, 0x38, 0x0C, 0x04,
         ];
 
-        // Create a new instance of Shake256
         let mut xof = Shake256::new();
-
-        // Absorb data then flip (absorbing msg consumes full rate block).
         xof.absorb(&msg);
         xof.flip();
-
-        // Squeeze the first 32 bytes of XOF output.
         let mut out = [0u8; 32];
         xof.squeeze(&mut out);
-
-        // A mismatch here means process_block is faulty or was not called correctly
-        // at the block boundary, or buf was not cleared properly before `finalize_xof`.
         assert_eq!(
             out,
             [0xCC, 0x2E, 0xAA, 0x04, 0xEE, 0xF8, 0x47, 0x9C,
@@ -398,7 +364,7 @@ mod tests {
     /// the next — exercising the squeeze_pos == SHAKE256_RATE branch.
     /// Expected values from XKCP reference (ShortMsgKAT_SHAKE256.txt, Len=1088).
     #[test]
-    fn test_shake256_squeeze_block_boundary() {
+    fn shake256_squeeze_block_boundary() {
         #[rustfmt::skip]
         let msg = [
             0xB3, 0x2D, 0x95, 0xB0, 0xB9, 0xAA, 0xD2, 0xA8,
@@ -420,20 +386,11 @@ mod tests {
             0x37, 0x67, 0x4C, 0x6F, 0x8E, 0x38, 0x0C, 0x04,
         ];
 
-        // Create a new instance of Shake256
         let mut xof = Shake256::new();
-
-        // Absorb data then flip (absorbing msg consumes full rate block).
         xof.absorb(&msg);
         xof.flip();
-
-        // Squeeze 144 bytes of XOF output.
         let mut out = [0u8; 144];
         xof.squeeze(&mut out);
-
-        // Bytes 0–135 come from the first squeeze block; bytes 136–143 require
-        // a second keccak_f. A mismatch in bytes 136+ means the squeeze boundary
-        // handling is broken.
         #[rustfmt::skip]
         assert_eq!(
             out,
@@ -466,7 +423,7 @@ mod tests {
     /// that exercises `absorb` calling `process_block` mid-stream.
     /// Expected values from XKCP ShortMsgKAT_SHAKE256.txt (Len=1600).
     #[test]
-    fn test_shake256_two_block_absorb() {
+    fn shake256_two_block_absorb() {
         #[rustfmt::skip]
         let msg = [
             0x8C, 0x37, 0x98, 0xE5, 0x1B, 0xC6, 0x84, 0x82,
@@ -496,19 +453,11 @@ mod tests {
             0xEB, 0xDD, 0xC8, 0x91, 0x86, 0x83, 0x9B, 0x77,
         ];
 
-        // Create a new instance of Shake256
         let mut xof = Shake256::new();
-
-        // Absorb data then flip (absorbing msg consumes full rate block).
         xof.absorb(&msg);
         xof.flip();
-
-        // Squeeze 32 bytes of XOF output.
         let mut out = [0u8; 32];
         xof.squeeze(&mut out);
-
-        // A mismatch here means absorb failed to flush at the 136-byte boundary,
-        // or buf was not cleared correctly before continuing into block 2.
         assert_eq!(
             out,
             [0x33, 0x40, 0xB3, 0x7A, 0xED, 0xD2, 0xF0, 0xC6,
@@ -523,18 +472,9 @@ mod tests {
     /// well-known output that exercises all 24 rounds and all five steps
     /// (θ, ρ, π, χ, ι) without any absorb/padding logic involved.
     #[test]
-    fn test_keccak_f_all_zeros() {
-        // Initalize all-zero state
+    fn keccak_f_all_zeros() {
         let mut state = [0u64; SHAKE256_STATE_LANES];
-
-        // Apply exactly one Keccak-f\[1600\] permutation in-place.
         keccak_f(&mut state);
-
-        // Expected output: the 25 state lanes after one permutation of the
-        // all-zero input, taken from the XKCP (Keccak Code Package) reference
-        // test vectors (KeccakF-1600-IntermediateValues.txt).
-        // A mismatch here means a bug in the round constants, rotation offsets,
-        // or one of the five steps.
         assert_eq!(state, [
             0xF1258F7940E1DDE7, 0x84D5CCF933C0478A, 0xD598261EA65AA9EE, 0xBD1547306F80494D,
             0x8B284E056253D057, 0xFF97A42D7F8E6FD4, 0x90FEE5A0A44647C4, 0x8C5BDA0CD6192E76,

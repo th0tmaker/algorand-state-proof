@@ -1,4 +1,4 @@
-// crates/keccak/src/zeroize.rs
+// crates/xof/src/zeroize.rs
 
 use core::sync::atomic::{compiler_fence, Ordering};
 
