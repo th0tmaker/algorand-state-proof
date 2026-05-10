@@ -1,9 +1,11 @@
 [package]
 name = "algorand-state-proof"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Cryptographic attestation of Algorand's ledger state across a block range — enables trustless, lightweight, quantum-secure verification without running a node."
-license = "MIT"
 
 [features]
 serde = ["dep:serde"]

@@ -1,9 +1,11 @@
 [package]
 name = "sumhash"
-version = "0.1.0"
-edition = "2024"
-description = "Algorand Sumhash512 — subset-sum hash function built on SHAKE256."
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Algorand Sumhash512 — subset-sum hash function built on SHAKE-256."
 
 [dependencies]
 xof = { path = "../xof" }
