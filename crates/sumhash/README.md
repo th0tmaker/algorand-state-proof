@@ -1,20 +1,21 @@
 # sumhash
 
-Post-quantum hash function exposing `Sumhash512` — the specific Algorand protocol
-variant used as the primary hash function for the participant and signature Vector
-Commitment trees in Algorand State Proofs.
+Subset-sum hash function implementing a generic `Sumhash` construction. It uses a compression matrix deterministically sampled from a
+public seed via the [`xof`](crates/xof/) crate’s `Shake256` and precomputes a lookup table to accelerate byte-wise matrix accumulation.
 
-Security is grounded in the hardness of the Short Integer Solution (SIS) lattice
-problem — a well-studied post-quantum assumption — rather than the
-symmetric-cipher-inspired constructions underlying SHA-2 or SHAKE-256. The
-compression matrix is derived deterministically from a public seed via SHAKE-256,
-so there is no hidden structure or backdoor assumption.
+Exposes a fixed instance named `Sumhash512`, instantiated with Algorand-specific parameters (fixed dimension and seed configuration).
+
+Security is grounded in the hardness of the Short Integer Solution (SIS) lattice problem.
+
+The construction is intended for Merkle tree hashing and cryptographic commitments within the Algorand state proof stack.
 
 `no_std` compatible — depends only on `core` and `alloc`.
 
 ## Disclaimer
 
-**WARNING: This crate is exploratory and has not been audited.** It is not the work of a credentialed cryptographer. Anyone using it should understand the potential risks and liabilities involved, and use it at their own discretion. The API is subject to potentially breaking changes.
+**WARNING: This crate is exploratory and has not been audited.** It is not the work of a credentialed cryptographer.
+Anyone using it should understand the potential risks and liabilities involved, and use it at their own discretion.
+The API is subject to potentially breaking changes.
 
 ## Usage
 

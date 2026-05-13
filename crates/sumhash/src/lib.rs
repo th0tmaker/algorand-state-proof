@@ -250,7 +250,7 @@ impl Sumhash {
         self.total_len = 0;
     }
 
-    /// Finalises the hash by padding the input, encoding its length,
+    /// Finalizes the hash by padding the input, encoding its length,
     /// processing the last block(s), and outputting the final state.
     ///
     /// Utilizies Merkle-Damgård construction with standard MD

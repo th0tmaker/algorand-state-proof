@@ -392,11 +392,12 @@ impl<H: MerkleHasher> Proof<H> {
         Self { tree_depth, path, hash_factory: HashFactory { hash_type: H::HASH_TYPE } }
     }
 
-    /// Low-level verify using a caller-supplied hasher. Reuse the same `h` across
-    /// multiple proof verifications to avoid rebuilding the [`Sumhash512`] lookup table.
+    /// Reconstructs [`Tree`] root from the proof path and returns `true` if it matches `root`.
     ///
-    /// `hash_factory` is for encoding/decoding only and has no runtime effect here;
-    /// the hasher is determined entirely by the type parameter `H`.
+    /// Uses a caller-supplied hasher instance, enabling reuse of the same `h`. Important for
+    /// performance critical application, e.g. when using [`Sumhash512`] as the hash function
+    /// while doing batch verification, as it avoids rebuilding the internal lookup table,
+    /// which is computationally expensive.
     pub fn verify_with(&self, leaf: H::Digest, index: usize, root: &H::Digest, h: &mut H) -> bool {
         let mut current = leaf;
         let mut idx = index;
@@ -408,26 +409,35 @@ impl<H: MerkleHasher> Proof<H> {
         &current == root
     }
 
-    /// Reconstructs the root from the proof path and returns `true` if it matches `root`.
+    /// Reconstructs [`Tree`] root from the proof path and returns `true` if it matches `root`.
+    /// 
+    /// Initializes a fresh hasher instance per call then delegates
+    /// to [`verify_with`](Self::verify_with).
+    /// 
+    /// Only used for proofs produced by [`Tree::prove`].
     /// For proofs produced by [`VcTree::prove`] use [`verify_vc`](Self::verify_vc) instead.
     pub fn verify(&self, leaf: H::Digest, index: usize, root: &H::Digest) -> bool {
         let mut h = H::init();
         self.verify_with(leaf, index, root, &mut h)
     }
 
-    /// Verifies a VC proof using a caller-supplied hasher, avoiding a fresh 
-    /// [`Sumhash512`] construction when verifying many proofs in sequence.
-    ///
+    /// Reconstructs [`VcTree`] root from the proof path and returns `true` if it matches `root`.
+    /// 
     /// Translates external `index` to its bit-reversed internal position, then
     /// delegates to [`verify_with`](Self::verify_with).
+    ///
+    /// Uses a caller-supplied hasher instance, enabling reuse of the same `h`. Important for
+    /// performance critical application, e.g. when using [`Sumhash512`] as the hash function
+    /// while doing batch verification, as it avoids rebuilding the internal lookup table,
+    /// which is computationally expensive.
     pub fn verify_vc_with(&self, leaf: H::Digest, index: usize, root: &H::Digest, h: &mut H) -> bool {
         self.verify_with(leaf, vc_index(index, self.tree_depth), root, h)
     }
 
-    /// Verifies a proof produced by [`VcTree::prove`].
-    ///
-    /// Translates external `index` to its bit-reversed internal position, then
-    /// delegates to [`verify_with`](Self::verify_with).
+    /// Reconstructs [`VcTree`] root from the proof path and returns `true` if it matches `root`.
+    /// 
+    /// Initializes a fresh hasher instance per call. Translates external `index` to its
+    /// bit-reversed internal positionthen delegates to [`verify_vc_with`](Self::verify_vc_with).
     pub fn verify_vc(&self, leaf: H::Digest, index: usize, root: &H::Digest) -> bool {
         let mut h = H::init();
         self.verify_vc_with(leaf, index, root, &mut h)
@@ -441,8 +451,6 @@ impl<H: MerkleHasher> Proof<H> {
     ///
     /// If `elems` contains duplicate indices the last entry for that index wins silently;
     /// callers are responsible for ensuring indices are unique.
-    ///
-    /// For [`VcTree`] use [verify_batch_vc](Self::verify_batch_vc), which handles bit-reversal automatically.
     pub fn verify_batch(&self, elems: &[(usize, H::Digest)], root: &H::Digest) -> bool {
         if elems.is_empty() { return self.path.is_empty(); }
         let depth = self.tree_depth as usize;

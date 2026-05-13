@@ -23,7 +23,9 @@ and `Sumhash512` (64-byte digest) for participant and signature trees.
 
 ## Disclaimer
 
-**WARNING: This crate is exploratory and has not been audited.** It is not the work of a credentialed cryptographer. Anyone using it should understand the potential risks and liabilities involved, and use it at their own discretion. The API is subject to potentially breaking changes.
+**WARNING: This crate is exploratory and has not been audited.** It is not the work of a credentialed cryptographer.
+Anyone using it should understand the potential risks and liabilities involved, and use it at their own discretion.
+The API is subject to potentially breaking changes.
 
 ## Usage
 

@@ -1,14 +1,25 @@
 # algorand-state-proof
 
-Compact, trustless verifier for Algorand State Proofs — suitable for light
-clients, bridges, and zkVM guests. Decodes the proof from wire bytes and
-verifies the full seven-step protocol: weight threshold, strength inequality,
-batch Merkle proofs, Falcon signature verification, ephemeral key commitment,
-and coin-range validation.
+Compact, trustless verifier covering the full cryptographic stack behind Algorand's
+post-quantum State Proofs — suitable for light clients, bridges, and zkVM guests. 
+
+Supports constructing `StateProof` and `StateProofMessage` either directly or
+by decoding canonical MessagePack-encoded wire bytes.
+
+Implements the full verification protocol across all seven proof fields: weight threshold (`ProvenWeight` check),
+strength inequality, Vector Commitment batch Merkle proofs for the signature array (`S`) and participant array (`P`),
+FALCON signature verification with salt-version consistency (`v`), ephemeral key commitment via the Merkle Signature Scheme
+(within `r`), coin-range validation against the revealed positions (`pr`), and commitment root integrity (`c`).
+
+Also supports verifying that a `LightBlockHeader` is present at a given index within the attested 256-round interval
+by the `StateProofMessage`, and that a specific transaction is present at a given index within a block's payset of 
+transactions.
 
 ## Disclaimer
 
-**WARNING: This crate is exploratory and has not been audited.** It is not the work of a credentialed cryptographer. Anyone using it should understand the potential risks and liabilities involved, and use it at their own discretion. The API is subject to potentially breaking changes.
+**WARNING: This crate is exploratory and has not been audited.** It is not the work of a credentialed cryptographer. 
+Anyone using it should understand the potential risks and liabilities involved, and use it at their own discretion. 
+The API is subject to potentially breaking changes.
 
 ## Installation
 
@@ -80,7 +91,7 @@ let next_anchor = verify_state_proof(&sp, &message, &anchor)?;
 // Pass next_anchor to the next verify_state_proof call.
 ```
 
-The first `TrustAnchor` must be bootstrapped out-of-band from a trusted
+> NOTE: The first `TrustAnchor` must be bootstrapped out-of-band from a trusted
 checkpoint — either the genesis state or a known-good block header.
 
 ### Block header verification
@@ -95,10 +106,10 @@ let proof  = Proof::<Sha256>::new(tree_depth, path);
 let ok = verify_block_header_commitment(&header, index, &proof, &message.block_headers_commitment);
 ```
 
-`LightBlockHeader` is not returned directly by the algod API — it must be
-constructed from the block header response. Exactly one of `seed` or
-`block_hash` is populated depending on the consensus protocol version; the
-other must be `[0u8; 32]`.
+> NOTE: `LightBlockHeader` is not returned directly by the algod API — it must be
+constructed by fetching the full block header in the response and trimming it down.
+Exactly one of  `seed` or `block_hash` is populated depending on the consensus
+protocol version; the other must be `[0u8; 32]`.
 
 ### Transaction verification
 
@@ -115,9 +126,9 @@ let ok = verify_txn_commitment(
 );
 ```
 
-Note: `txn_sha256` uses **SHA-256**, not the SHA-512/256 used in Algorand
-transaction IDs. Transaction bytes must include `gh` and `gen` fields that
-block storage strips.
+> NOTE: `txn_sha256` is computed using **SHA-256**, not the `SHA-512/256`,
+which is used in Algorand to compute transaction IDs. Transaction bytes
+must include `gh` and `gen` fields that block storage strips.
 
 ### Error handling
 
@@ -140,7 +151,7 @@ match verify_state_proof(&sp, &message, &anchor) {
     Err(VerifyError::InsufficientReveals)         => { /* too few reveals for strength target */ }
     Err(VerifyError::SigProofFailed)              => { /* batch Merkle proof failed */ }
     Err(VerifyError::PartProofFailed)             => { /* participant proof failed */ }
-    Err(VerifyError::FalconVerifyFailed { .. })   => { /* ephemeral signature invalid */ }
+    Err(VerifyError::FalconVerifyFailed { .. })   => { /* falcon signature invalid */ }
     Err(VerifyError::VcProofFailed { .. })        => { /* ephemeral key not committed */ }
     Err(VerifyError::CoinOutOfRange { .. })       => { /* coin outside weight range */ }
     Ok(next_anchor) => { /* chain to next interval */ }
@@ -149,47 +160,49 @@ match verify_state_proof(&sp, &message, &anchor) {
 
 ## Public types
 
-The following types are exposed for callers who need to inspect decoded state
-proof data:
+Publicly exposed data types used in State Proof verification:
 
 | Type | Description |
 |---|---|
-| `StateProof` | The proof itself — sig/part commitments, reveals, positions |
-| `StateProofMessage` | What was attested: block interval commitment + next-interval trust params |
-| `TrustAnchor` | Trusted parameters passed into and returned from `verify_state_proof` |
-| `LightBlockHeader` | Minimal block header for commitment verification |
-| `MessageHash` | `[u8; 32]` — SHA-256 digest of the `StateProofMessage` |
-| `Reveal` | Data opened at one pseudorandomly challenged array position |
-| `Participant` | An online account that signed: verifying key + stake weight |
-| `SigSlotCommit` | Signature slot: the participant's Merkle signature + cumulative weight `l` |
-| `MerkleVerifier` | Participant's verifying key: VC root over ephemeral keys + key lifetime |
-| `MerkleSignatureScheme` | One complete Merkle signature: Falcon sig + ephemeral key + VC proof |
-| `FalconPublicKey` | Re-exported ephemeral Falcon-1024 verifying key |
-| `FalconCompressedSig` | Re-exported compressed Falcon-1024 signature |
+| `StateProof` | Main cryptographic proof that a sufficient amount of online stake signed a message attesting to the state across a 256-round interval.
+Encodes commitments, total signed weight, Merkle proofs, and a pseudorandomly revealed subset of participants/signatures. |
+| `StateProofMessage` | Message attested by a `StateProof`. Contains the block header commitment, interval bounds,
+and the parameters (`voters_commitment`, `ln_proven_weight`) needed to verify the next interval. |
+| `TrustAnchor` | Carries trusted parameters (`part_commitment`, `ln_proven_weight`) between intervals.
+Used to verify a `StateProof`, producing the next anchor and forming a sequential trust chain. |
+| `MessageHash` | `[u8; 32]` SHA-256 digest of the canonical `StateProofMessage`. |
+| `Participant` | On-chain voter identity: a `MerkleVerifier` and stake weight. |
+| `MerkleVerifier` | Commitment to a participant’s ephemeral keys (`Sumhash512` VC root) and key lifetime. |
+| `MerkleSignatureScheme` | Merkle-authenticated signature: Falcon signature, verifying key, VC proof, and leaf index. |
+| `SigSlotCommit` | Signature array slot containing a Merkle signature and cumulative weight offset `l`. |
+| `Reveal` | One pseudorandomly selected stake-weighted participant (out of all signers) to reveal; pairs a `SigSlotCommit` with its `Participant`. |
+| `CoinChoiceSeed` | Structured seed absorbed into SHAKE256 for pseudorandom reveal selection. |
+| `CoinGenerator` | SHAKE256-based generator producing uniform coins in `[0, signed_weight)`. |
+| `PublicKey` | Falcon-1024 ephemeral verifying key used for signature verification. Imported from `algorand-falcon-keys`. |
+| `CompressedSignature` | Compressed Falcon-1024 signature over the `MessageHash`. Imported from `algorand-falcon-keys`. |
 
 ## Trust model
 
-This crate is a pure verifier — it holds no private key material and makes no
-network calls. Its single trust assumption is the initial `TrustAnchor`: the
-first anchor must be bootstrapped from a source you already trust. Every
-subsequent anchor is derived cryptographically from the previous one. If the
-initial anchor is correct and the verification chain is unbroken, the crate
-provides post-quantum-secure attestation of Algorand's ledger state.
+This crate is purely a verification pipeline — it holds no private key material and makes no network calls.
+Its single trust assumption is the initial `TrustAnchor`: the first anchor must be bootstrapped from a source
+you already trust. Every subsequent anchor is derived cryptographically from the previous one. If the initial
+anchor is correct and the verification chain is unbroken, the crate provides post-quantum-secure attestation 
+of Algorand's ledger state.
 
 ## Data sources
 
-All wire bytes passed to this crate are fetched from the Algorand node (algod) API:
+External data retrieved from Algorand node APIs for state proof construction and verification:
 
-| Data | Endpoint |
-|---|---|
-| State proof transaction (msgpack bytes) | `GET /v2/transactions/{txid}` via indexer, or watch for `StateProofTransaction` type |
-| `StateProofMessage` fields | Same transaction — the `StateProofMsg` field |
-| Previous `StateProofMessage` (for `TrustAnchor`) | The preceding state proof transaction's `StateProofMsg` |
-| Light block header | `GET /v2/blocks/{round}/lightheader` |
-| Block header proof path | `GET /v2/blocks/{round}/lightheader/proof` |
-| Transaction proof | `GET /v2/blocks/{round}/transactions/{txid}/proof?hashtype=sha256` |
+| Data | Purpose | Provider | Endpoint |
+|---|---|---|---|
+| `StateProof` & `StateProofMessage` | Retrieve the full state proof object for a given block round | algod | `GET /v2/stateproofs/{round}` |
+| State Proof Transactions | Retrieve transactions of type `stpf` (StateProof) over a round range | indexer | `GET /v2/transactions?tx-type=stpf&min-round={round}` |
+| Single block header (no payset) | Retrieve a block header without transactions | algod, indexer | `GET /v2/blocks/{round}?header-only=true` |
+| Multiple block headers | Fetch a batch of block headers | indexer | `GET /v2/block-headers` |
+| Light block header proof | Prove inclusion of a light header in the state proof commitment over block headers | algod | `GET /v2/blocks/{round}/lightheader/proof` |
+| Transaction proof | Prove inclusion of a transaction in a block | algod | `GET /v2/blocks/{round}/transactions/{txid}/proof?hashtype=sha256` |
 
-The `hashtype=sha256` parameter is required — the default `sha512_256` variant
+> NOTE: The `hashtype=sha256` parameter is required — the default `sha512_256` variant
 is incompatible with `verify_txn_commitment`.
 
 ## Cryptographic primitives
@@ -204,7 +217,8 @@ is incompatible with `verify_txn_commitment`.
 ## Optional: serde feature
 
 Enables `serde::Serialize` and `serde::Deserialize` for `TrustAnchor`, required
-for passing it across a RISC Zero zkVM guest/host boundary:
+for byte representation consistency when passing it across various platforms
+e.g. a RISC Zero zkVM guest/host boundary:
 
 ```toml
 algorand-state-proof = { ..., features = ["serde"] }
