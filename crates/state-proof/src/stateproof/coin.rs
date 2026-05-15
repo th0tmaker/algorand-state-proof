@@ -1,6 +1,6 @@
 // crates/state-proof/src/stateproof/coin.rs
 
-use xof::Shake256;
+use sha3::{Shake256, Shake256Reader, digest::{ExtendableOutput, Update, XofReader}};
 use merkle::{Sumhash512Digest, SUMHASH512_DIGEST_SIZE};
 
 use super::constants::{COIN_CHOICE_SEED_SIZE, COIN_GENERATOR_VERSION, DOMAIN_COIN_SEED};
@@ -22,7 +22,7 @@ pub fn ln_int_approximation(x: u64) -> Option<u64> {
 
 // ── CoinChoiceSeed ────────────────────────────────────────────────────────────
 
-/// The input seed absorbed by [`xof::Shake256`] inside the [`CoinGenerator`].
+/// The input seed absorbed by `SHAKE256` inside the [`CoinGenerator`].
 /// Each field contributes to the pseudorandom coin stream that selects which
 /// [`crate::Reveal`] positions are checked during [`crate::StateProof`] verification.
 pub struct CoinChoiceSeed {
@@ -67,7 +67,7 @@ impl CoinChoiceSeed {
 /// returned as `sample % signed_weight`.
 #[derive(Debug)]
 pub struct CoinGenerator {
-    xof: Shake256,
+    xof: Shake256Reader,
     signed_weight: u64,
     /// Largest multiple of `signed_weight` that fits in a u64 — the rejection boundary.
     threshold: u128,
@@ -76,9 +76,9 @@ pub struct CoinGenerator {
 impl CoinGenerator {
     /// Constructs a new instance of `CoinGenerator` from `seed`.
     pub fn new(seed: &CoinChoiceSeed) -> Self {
-        let mut xof = Shake256::new();
-        xof.absorb(&seed.to_bytes());
-        xof.flip();
+        let mut hasher = Shake256::default();
+        hasher.update(&seed.to_bytes());
+        let xof = hasher.finalize_xof();
 
         let signed_weight = seed.signed_weight;
 
@@ -102,7 +102,7 @@ impl CoinGenerator {
     pub fn next_coin(&mut self) -> u64 {
         loop {
             let mut buf = [0u8; 8];
-            self.xof.squeeze(&mut buf);
+            self.xof.read(&mut buf);
             let sample = u64::from_le_bytes(buf) as u128;
             if sample < self.threshold {
                 return (sample % self.signed_weight as u128) as u64;

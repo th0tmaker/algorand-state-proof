@@ -11,7 +11,7 @@ description = "Cryptographic attestation of Algorand's ledger state across a blo
 serde = ["dep:serde"]
 
 [dependencies]
-xof = { path = "../xof" }
+sha3 = { version = "0.11", default-features = false }
 merkle = { path = "../merkle" }
 sha2 = "0.11"
 algorand-falcon-keys = { git = "https://github.com/th0tmaker/algorand-falcon-keys", rev = "359ef8085c555746f2ff21fce98172d67b4d05cf" }

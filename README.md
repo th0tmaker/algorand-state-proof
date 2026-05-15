@@ -48,7 +48,6 @@ participant set.
 | [`state-proof`](crates/state-proof/) | State proof decoder and verifier — the primary public-facing crate |
 | [`merkle`](crates/merkle/) | Generic Merkle tree and Vector Commitment tree over SHA-256 or Sumhash512 |
 | [`sumhash`](crates/sumhash/) | Algorand's Sumhash512 post-quantum hash function |
-| [`xof`](crates/xof/) | SHAKE-256 extendable-output function (XOF) and `Zeroize` trait |
 
 Most users only need `state-proof`. The other crates are independently usable
 but are primarily internal building blocks.

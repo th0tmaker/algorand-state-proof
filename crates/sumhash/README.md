@@ -1,7 +1,7 @@
 # sumhash
 
 Subset-sum hash function implementing a generic `Sumhash` construction. It uses a compression matrix deterministically sampled from a
-public seed via the [`xof`](crates/xof/) crate’s `Shake256` and precomputes a lookup table to accelerate byte-wise matrix accumulation.
+public seed via `SHAKE256` (from the `sha3` crate) and precomputes a lookup table to accelerate byte-wise matrix accumulation.
 
 Exposes a fixed instance named `Sumhash512`, constructed with Algorand-specific parameters (fixed dimension and seed configuration).
 
@@ -43,12 +43,6 @@ h.reset(); // ready to hash again
 
 `Sumhash512` implements the `MerkleHasher` trait from the [`merkle`](../merkle/)
 crate, making it directly usable for any tree construction that supports the trait.
-
-## Memory safety
-
-`Sumhash512` implements `Drop` with zeroization: the internal state, output buffer,
-and block buffer are overwritten with zeros on drop, reducing the window in which
-intermediate hash state lingers in memory.
 
 ## Building
 
