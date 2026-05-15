@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Algorand Sumhash512 — subset-sum hash function built on SHAKE-256."
+description = "Subset-sum hash with SHAKE256-derived matrix and lookup-table compression. Includes Sumhash512 used in Algorand State Proofs."
 
 [dependencies]
-xof = { path = "../xof" }
+sha3 = { version = "0.11", default-features = false }

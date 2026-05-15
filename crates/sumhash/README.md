@@ -3,7 +3,7 @@
 Subset-sum hash function implementing a generic `Sumhash` construction. It uses a compression matrix deterministically sampled from a
 public seed via the [`xof`](crates/xof/) crate’s `Shake256` and precomputes a lookup table to accelerate byte-wise matrix accumulation.
 
-Exposes a fixed instance named `Sumhash512`, instantiated with Algorand-specific parameters (fixed dimension and seed configuration).
+Exposes a fixed instance named `Sumhash512`, constructed with Algorand-specific parameters (fixed dimension and seed configuration).
 
 Security is grounded in the hardness of the Short Integer Solution (SIS) lattice problem.
 
