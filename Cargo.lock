@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "algorand-falcon-keys"
 version = "0.1.0"
-source = "git+https://github.com/th0tmaker/algorand-falcon-keys?rev=75904e74b72ecdc45d370a73489c7507a172bc40#75904e74b72ecdc45d370a73489c7507a172bc40"
+source = "git+https://github.com/th0tmaker/algorand-falcon-keys?rev=a12fd278fe12cb510955bdd452ba12c9ec97e8e9#a12fd278fe12cb510955bdd452ba12c9ec97e8e9"
 dependencies = [
  "cc",
  "zeroize",

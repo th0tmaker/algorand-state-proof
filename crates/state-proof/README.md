@@ -17,9 +17,8 @@ transactions.
 
 ## Disclaimer
 
-**WARNING: This crate is exploratory and has not been audited.** It is not the work of a credentialed cryptographer. 
-Anyone using it should understand the potential risks and liabilities involved, and use it at their own discretion. 
-The API is subject to potentially breaking changes.
+> [!CAUTION]
+> **This crate is exploratory and has not been audited.** It is not the work of a credentialed cryptographer. Anyone using it should understand the potential risks and liabilities involved, and use it at their own discretion. The API and internal derivation parameters are subject to potentially breaking changes.
 
 ## Installation
 
@@ -106,7 +105,8 @@ let proof  = Proof::<Sha256>::new(tree_depth, path);
 let ok = verify_block_header_commitment(&header, index, &proof, &message.block_headers_commitment);
 ```
 
-> NOTE: `LightBlockHeader` is not returned directly by the algod API — it must be
+> [!NOTE]
+> The `LightBlockHeader` is not returned directly by the algod API — it must be
 constructed by fetching the full block header in the response and trimming it down.
 Exactly one of  `seed` or `block_hash` is populated depending on the consensus
 protocol version; the other must be `[0u8; 32]`.
@@ -202,7 +202,8 @@ External data retrieved from Algorand node APIs for state proof construction and
 | Light block header proof | Prove inclusion of a light header in the state proof commitment over block headers | algod | `GET /v2/blocks/{round}/lightheader/proof` |
 | Transaction proof | Prove inclusion of a transaction in a block | algod | `GET /v2/blocks/{round}/transactions/{txid}/proof?hashtype=sha256` |
 
-> NOTE: The `hashtype=sha256` parameter is required — the default `sha512_256` variant
+> [!NOTE]
+> The `hashtype=sha256` parameter is required — the default `sha512_256` variant
 is incompatible with `verify_txn_commitment`.
 
 ## Cryptographic primitives
