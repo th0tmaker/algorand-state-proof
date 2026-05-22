@@ -14,7 +14,7 @@ serde = ["dep:serde"]
 sha3 = { version = "0.11", default-features = false }
 merkle = { path = "../merkle" }
 sha2 = "0.11"
-algorand-falcon-keys = { git = "https://github.com/th0tmaker/algorand-falcon-keys", rev = "a12fd278fe12cb510955bdd452ba12c9ec97e8e9" }
+algorand-falcon-keys = { git = "https://github.com/th0tmaker/algorand-falcon-keys", rev = "60bef4a" }
 serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
